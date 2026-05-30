@@ -1,0 +1,44 @@
+{
+  "wahatsap": [
+    {
+      "command": "open_url",
+      "val": "https://web.whatsapp.com"
+    },
+    {
+      "command": "wait",
+      "val": "5000"
+    },
+    {
+      "command": "hotkey",
+      "val": "Ctrl+K"
+    },
+    {
+      "command": "wait",
+      "val": "500"
+    },
+    {
+      "command": "type",
+      "val": "Nombre del contacto"
+    },
+    {
+      "command": "wait",
+      "val": "500"
+    },
+    {
+      "command": "press",
+      "val": "Enter"
+    },
+    {
+      "command": "wait",
+      "val": "500"
+    },
+    {
+      "command": "type",
+      "val": "Mensaje a enviar"
+    },
+    {
+      "command": "press",
+      "val": "Enter"
+    }
+  ]
+}
