@@ -58,7 +58,7 @@ echo [2/5] Descargando JARVIS nuevo desde GitHub...
 set NEWDIR=%USERPROFILE%\Documents\_jarvis_repo_nuevo
 if exist "%NEWDIR%" rmdir /s /q "%NEWDIR%"
 
-git clone https://github.com/Gzsun4/jarvis-ai-mod "%NEWDIR%"
+git clone https://github.com/Maruchan35/asistente "%NEWDIR%"
 if errorlevel 1 (
     echo [ERROR] No se pudo clonar. Verifica tu internet.
     rmdir /s /q "%BACKUP%" >nul 2>&1
