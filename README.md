@@ -62,27 +62,49 @@ Un asistente de voz inspirado en el JARVIS de Iron Man, construido sobre Gemini 
 - **sounddevice + vosk** para audio
 - **keyboard** para hotkey global
 
-## 🚀 Instalación
+## 🚀 Instalación rápida (5 minutos)
 
-### Opción 1 — Instalación automática
+### Requisitos previos
 
-1. Instala [Python 3.12](https://www.python.org/downloads/) con "Add Python to PATH"
-2. Instala [Git](https://git-scm.com/download/win)
-3. Clona el repo:
-   ```bash
-   git clone https://github.com/TU_USUARIO/JARVIS-AI.git
-   cd JARVIS-AI
-   ```
-4. Ejecuta el instalador:
-   ```cmd
-   Instalar_JARVIS.bat
-   ```
-5. Copia el template de configuración:
-   ```cmd
-   copy config\api_keys.template.json config\api_keys.json
-   ```
-6. Edita `config/api_keys.json` y pega tus API keys (Gemini obligatorio)
-7. Lanza con `JARVIS_Iniciar.bat`
+1. **Python 3.12** — <https://www.python.org/downloads/> · ⚠️ Marca "Add Python to PATH" al instalar
+2. **Git** — <https://git-scm.com/download/win>
+3. **API key de Gemini (gratis)** — <https://aistudio.google.com/app/apikey>
+   - Inicia sesión con tu cuenta de Google
+   - Haz clic en **"Create API key"**
+   - Copia la clave (empieza con `AQ.Ab8...` o similar) — la vas a necesitar en el paso 4
+
+### Pasos
+
+```cmd
+1) Clonar el repo
+   git clone https://github.com/Maruchan35/asistente.git
+   cd asistente
+
+2) Doble click en  Instalar_JARVIS.bat
+   (te pide permisos de admin; instala ~3 GB de dependencias en 5-10 min)
+
+3) El instalador crea automáticamente  config\api_keys.json  vacío
+   a partir del template api_keys.example.json
+
+4) Abre  config\api_keys.json  con Notepad y reemplaza:
+
+       "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE"
+
+   por tu clave real (la que copiaste del paso 3 de requisitos):
+
+       "gemini_api_key": "AQ.Ab8RN6IwXXXXXXXXXXXXXXX"
+
+5) Guarda el archivo  y haz doble click en  JARVIS_Iniciar.bat
+```
+
+### ⚠️ Errores comunes
+
+| Síntoma | Solución |
+|---|---|
+| "API key de Gemini no configurada" | Editaste mal `config/api_keys.json`, sigue el paso 4 |
+| "Python not found" | Olvidaste marcar "Add Python to PATH" — reinstala Python |
+| Pip falla con algún paquete | Corre `REINSTALAR_JARVIS.bat` — reinstala uno por uno con fallback |
+| Sin sonido | Verifica el dispositivo en `config/api_keys.json` → `mic_device` y `speaker_device` |
 
 ### Opción 2 — Manual
 

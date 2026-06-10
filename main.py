@@ -523,8 +523,47 @@ def _get_api_key() -> str:
     global _cached_api_key
     if _cached_api_key:
         return _cached_api_key
-    with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-        _cached_api_key = json.load(f)["gemini_api_key"]
+    try:
+        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+            _cached_api_key = json.load(f).get("gemini_api_key", "").strip()
+    except FileNotFoundError:
+        _cached_api_key = ""
+
+    # Validar que no sea el placeholder del template
+    _placeholders = (
+        "", "YOUR_GEMINI_API_KEY_HERE", "PEGAR_AQUI_TU_API_KEY_DE_GEMINI",
+        "YOUR_API_KEY_HERE", "PUT_YOUR_KEY_HERE",
+    )
+    if _cached_api_key in _placeholders or _cached_api_key.upper().startswith("YOUR_"):
+        msg = (
+            "\n" + "="*70 + "\n"
+            " [ERROR] Falta tu API key de Gemini.\n"
+            "="*70 + "\n\n"
+            " JARVIS necesita una API key de Google Gemini para funcionar.\n\n"
+            " 1. Abre:  https://aistudio.google.com/app/apikey\n"
+            " 2. Haz clic en 'Create API key' (es gratis)\n"
+            " 3. Copia la key (empieza con 'AQ.Ab8RN6...' o similar)\n"
+            " 4. Abre con Notepad el archivo:\n"
+            f"        {API_CONFIG_PATH}\n"
+            " 5. Reemplaza el valor de 'gemini_api_key' por la que copiaste\n"
+            " 6. Guarda el archivo y reinicia JARVIS\n\n"
+            + "="*70 + "\n"
+        )
+        print(msg)
+        # Intentar mostrar también en una ventana si Qt ya está cargado
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            app = QApplication.instance()
+            if app is not None:
+                QMessageBox.critical(None, "JARVIS — Falta API Key",
+                    "Falta tu API key de Gemini.\n\n"
+                    "Obténla gratis en:\nhttps://aistudio.google.com/app/apikey\n\n"
+                    f"Luego edita:\n{API_CONFIG_PATH}\n"
+                    "y reemplaza 'YOUR_GEMINI_API_KEY_HERE' por tu clave."
+                )
+        except Exception:
+            pass
+        raise RuntimeError("API key de Gemini no configurada (es placeholder o está vacía)")
     return _cached_api_key
 
 
