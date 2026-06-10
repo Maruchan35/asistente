@@ -18,7 +18,7 @@ config/api_keys.json
 config/rules.json
 config/vision_guardian_state.json
 config/whatsapp_contacts.json
-config/whatsapp_coords.json
+# config/whatsapp_coords.json  ← se incluye en el repo (1920x1080, universal)
 config/hand_landmarker.task
 config/*.png
 config/*.jpg

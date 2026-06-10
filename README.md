@@ -151,7 +151,10 @@ Recomendado pero opcional:
    ```
 
 ### 💬 WhatsApp
-Funciona sobre WhatsApp Web — la primera vez te pedirá calibrar coordenadas con `python scratch/calibrate_wa.py` (incluido).
+Funciona sobre WhatsApp Web. **Las coordenadas ya vienen calibradas para 1920x1080** (la resolución más común en monitores Full HD). Si tu monitor es 4K, 1366x768 u otra resolución, recalibra con:
+```bash
+python scratch/calibrate_wa.py
+```
 
 ### 📞 Telegram
 Crea bot con [@BotFather](https://t.me/BotFather) en Telegram → copia el token a `telegram_bot_token`.

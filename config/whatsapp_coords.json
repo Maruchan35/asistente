@@ -1,0 +1,15 @@
+{
+  "_comment": "Coordenadas calibradas para WhatsApp Web en 1920x1080 (Full HD — pantalla mas comun). Si tu resolucion es distinta, recalibra con: python scratch/calibrate_wa.py",
+  "attach_button": {
+    "x": 702,
+    "y": 979
+  },
+  "document_item": {
+    "x": 707,
+    "y": 601
+  },
+  "screen_resolution": [
+    1920,
+    1080
+  ]
+}
