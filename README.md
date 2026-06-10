@@ -106,6 +106,62 @@ Un asistente de voz inspirado en el JARVIS de Iron Man, construido sobre Gemini 
 | Pip falla con algún paquete | Corre `REINSTALAR_JARVIS.bat` — reinstala uno por uno con fallback |
 | Sin sonido | Verifica el dispositivo en `config/api_keys.json` → `mic_device` y `speaker_device` |
 
+## ✅ Qué funciona solo con la API key de Gemini
+
+El instalador descarga automáticamente: dependencias Python, Chromium para Playwright, y modelo Vosk para wake word offline. Con **solo** la `gemini_api_key`, esto funciona **out-of-the-box**:
+
+- 🎤 **Voz** (Gemini Live + transcripción)
+- 👁️ **Visión de pantalla** (`screen_vision`)
+- 📄 **Documentos Word/Excel/PDF** (`document_creator`)
+- 🧠 **Memoria persistente**, correcciones, emociones
+- 🌐 **Búsqueda web** (DuckDuckGo, sin API key)
+- ☀️ **Clima** (Open-Meteo, sin API key)
+- 🖥️ **Control de sistema** (volumen, brillo, wifi, apps)
+- 📂 **Gestión de archivos** (mover, organizar, analizar)
+- 🎯 **Activity panel, focus mode, pair programming, dashboard**
+- ⌨️ **Hotkey global** `Ctrl+Alt+J`
+- 🗣️ **Wake word** "JARVIS" (modo offline con Vosk)
+- 🌐 **Navegador automatizado** (Playwright + Chromium)
+- 🧪 **Tests** (`python tests/smoke_tools.py`)
+
+## 🔧 Qué requiere configuración EXTRA (opcional)
+
+Estas funciones son **opcionales** — JARVIS arranca sin ellas, simplemente esas herramientas devuelven un error específico si las invocas.
+
+### 📚 `deep_research` (investigaciones largas)
+Recomendado pero opcional:
+- **OpenRouter** (créditos gratis al registrarse): <https://openrouter.ai/keys> → pegá la key en `openrouter_api_key`
+- Fallback automático: **DeepSeek** <https://platform.deepseek.com/api_keys> → `deepseek_api_key`
+
+### 📧 Gmail / Google Calendar / Google Drive
+1. Crea proyecto en <https://console.cloud.google.com/>
+2. Habilita Gmail API + Calendar API + Drive API
+3. Crea credenciales OAuth 2.0 → descarga JSON
+4. Guárdalo como `config/google_credentials.json`
+5. Primera vez que uses la herramienta, abrirá tu navegador para autorizar
+
+### 🎵 Spotify
+1. Crea app en <https://developer.spotify.com/dashboard>
+2. Redirect URI: `http://127.0.0.1:8765/callback`
+3. Copia `Client ID` y `Client Secret` en `api_keys.json`:
+   ```json
+   "spotify_client_id": "tu_id_aqui",
+   "spotify_client_secret": "tu_secret_aqui",
+   "spotify_redirect_uri": "http://127.0.0.1:8765/callback"
+   ```
+
+### 💬 WhatsApp
+Funciona sobre WhatsApp Web — la primera vez te pedirá calibrar coordenadas con `python scratch/calibrate_wa.py` (incluido).
+
+### 📞 Telegram
+Crea bot con [@BotFather](https://t.me/BotFather) en Telegram → copia el token a `telegram_bot_token`.
+
+### 🏠 Smart Home (Home Assistant)
+Requiere Home Assistant corriendo en tu red local. Configura `homeassistant_url` y `homeassistant_token`.
+
+### 🎮 Steam / Epic / juegos
+Funciona sin config si tienes los launchers instalados en rutas estándar.
+
 ### Opción 2 — Manual
 
 ```bash

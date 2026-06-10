@@ -117,7 +117,36 @@ def main():
         print(f"\033[31m\n[ERROR] Ocurrió un error al instalar dependencias: {e}\033[0m")
         input("Presiona Enter para salir...")
         sys.exit(1)
-        
+
+    # ── Instalar Chromium para Playwright (browser_control) ───────────────────
+    print()
+    print("\033[33m[INFO] Instalando Chromium para Playwright (control de navegador)...\033[0m")
+    try:
+        subprocess.run([venv_python, "-m", "playwright", "install", "chromium"],
+                       check=False, timeout=300)
+        print("\033[32m[OK] Chromium instalado para Playwright.\033[0m")
+    except Exception as e:
+        print(f"\033[33m[AVISO] No se pudo instalar Chromium ({e}). "
+              "browser_control podría no funcionar — puedes correrlo manualmente:\033[0m")
+        print(f"        {venv_python} -m playwright install chromium")
+
+    # ── Descargar modelo Vosk para wake word offline ──────────────────────────
+    vosk_model_path = os.path.join("config", "vosk_model")
+    if not os.path.exists(vosk_model_path):
+        print()
+        print("\033[33m[INFO] Descargando modelo Vosk en español (~39 MB) para wake word offline...\033[0m")
+        try:
+            subprocess.run([venv_python, "download_vosk.py"], check=False, timeout=300)
+            if os.path.exists(vosk_model_path):
+                print("\033[32m[OK] Modelo Vosk instalado. Wake word \"JARVIS\" funcionando offline.\033[0m")
+            else:
+                print("\033[33m[AVISO] Modelo Vosk no descargó. Wake word usará fallback online.\033[0m")
+        except Exception as e:
+            print(f"\033[33m[AVISO] No se pudo descargar Vosk ({e}). "
+                  "Puedes ejecutarlo después con: python download_vosk.py\033[0m")
+    else:
+        print("\033[32m[OK] Modelo Vosk ya presente.\033[0m")
+
     time.sleep(1)
     
     # FASE 4: Configuración inicial
