@@ -128,18 +128,24 @@ def main():
     
     config_dir = os.path.join(".", "config")
     api_keys_path = os.path.join(config_dir, "api_keys.json")
-    api_keys_template = os.path.join(config_dir, "api_keys.example.json")
+    # Buscar template en múltiples nombres convencionales
+    api_keys_template = None
+    for candidate in ("api_keys.template.json", "api_keys.example.json"):
+        cand_path = os.path.join(config_dir, candidate)
+        if os.path.exists(cand_path):
+            api_keys_template = cand_path
+            break
     rules_path = os.path.join(config_dir, "rules.json")
-    
+
     if not os.path.exists(config_dir):
         os.makedirs(config_dir, exist_ok=True)
         print("\033[32m[OK] Directorio config/ creado.\033[0m")
-    
+
     if not os.path.exists(api_keys_path):
-        if os.path.exists(api_keys_template):
+        if api_keys_template:
             shutil.copy2(api_keys_template, api_keys_path)
             print("\033[32m[OK] Archivo api_keys.json creado desde plantilla.\033[0m")
-            print("\033[33m[INFO] Al iniciar JARVIS se te pedirán tus API Keys de Gemini y OpenRouter.\033[0m")
+            print("\033[33m[INFO] Edita config/api_keys.json y agrega tu API Key de Gemini.\033[0m")
         else:
             # Crear un archivo mínimo con campos vacíos
             import json

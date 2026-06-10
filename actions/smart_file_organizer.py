@@ -30,7 +30,61 @@ def smart_file_organizer(parameters: dict, player=None) -> str:
     if not target_path.exists() or not target_path.is_dir():
         return f"Error: El directorio especificado '{target_dir_str}' no existe o no es válido."
 
-    if action == "organize":
+    if action == "preview_organize":
+        # MODO SEGURO: Solo muestra qué se haría, sin mover nada
+        categories = {
+            "Documentos": [".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".odt"],
+            "Imagenes": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg"],
+            "Videos": [".mp4", ".mkv", ".avi", ".mov", ".flv"],
+            "Musica": [".mp3", ".wav", ".flac", ".ogg"],
+            "Instaladores": [".exe", ".msi"],
+            "Comprimidos": [".zip", ".rar", ".7z", ".tar", ".gz"]
+        }
+        preview = []
+        for file in target_path.iterdir():
+            if file.is_file():
+                ext = file.suffix.lower()
+                for cat, extensions in categories.items():
+                    if ext in extensions:
+                        preview.append(f"'{file.name}' → '{cat}/'")
+                        break
+        if not preview:
+            return f"No hay archivos para organizar en '{target_path.name}'."
+        return (
+            f"Vista previa de organización para '{target_path.name}' ({len(preview)} archivos):\n"
+            + "\n".join(preview[:15])
+            + ("\n...[y más]" if len(preview) > 15 else "")
+            + "\n\n⚠️ Para ejecutar, usa action='organize' y confirma explícitamente."
+        )
+
+    elif action == "organize":
+        # ⚠️ REQUIERE confirmed=True como protección contra accidentes
+        if not parameters.get("confirmed", False):
+            # Generar preview en lugar de ejecutar
+            categories_preview = {
+                "Documentos": [".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".odt"],
+                "Imagenes": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".svg"],
+                "Videos": [".mp4", ".mkv", ".avi", ".mov", ".flv"],
+                "Musica": [".mp3", ".wav", ".flac", ".ogg"],
+                "Instaladores": [".exe", ".msi"],
+                "Comprimidos": [".zip", ".rar", ".7z", ".tar", ".gz"]
+            }
+            preview = []
+            for file in target_path.iterdir():
+                if file.is_file():
+                    ext = file.suffix.lower()
+                    for cat, extensions in categories_preview.items():
+                        if ext in extensions:
+                            preview.append(f"'{file.name}' → '{cat}/'")
+                            break
+            if not preview:
+                return f"No hay archivos para organizar en '{target_path.name}'."
+            return (
+                f"⚠️ Se van a mover {len(preview)} archivos en '{target_path.name}':\n"
+                + "\n".join(preview[:10])
+                + ("\n...[y más]" if len(preview) > 10 else "")
+                + "\n\nPara confirmar, repite el comando con confirmed=true."
+            )
         # Organizar archivos por tipo en subcarpetas lógicas
         categories = {
             "Documentos": [".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".odt"],

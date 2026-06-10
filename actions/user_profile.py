@@ -23,10 +23,14 @@ def _load_profile() -> dict:
 
 def _save_profile(profile: dict) -> None:
     try:
-        PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+        from core.safe_json import safe_write
+        safe_write(PROFILE_PATH, profile)
+    except ImportError:
+        try:
+            PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            PROFILE_PATH.write_text(json.dumps(profile, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
 def record_action(name: str, args: dict) -> None:
     """Log executed actions to track user habits over time."""

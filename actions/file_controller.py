@@ -34,25 +34,65 @@ def _copy_file_to_clipboard_physical(file_path: str):
 def resolve_path(p: str) -> str:
     if not p:
         return os.path.expanduser("~/Desktop")
-    
-    p_lower = p.lower().strip()
+
+    p = p.strip()
+    p_lower = p.lower()
     home = os.path.expanduser("~")
-    
-    # Keyword short-circuits
-    if p_lower == "desktop" or p_lower.startswith("desktop\\") or p_lower.startswith("desktop/"):
-        rel = p[7:].lstrip("\\/")
-        return os.path.join(home, "Desktop", rel)
-    elif p_lower == "downloads" or p_lower.startswith("downloads\\") or p_lower.startswith("downloads/"):
-        rel = p[9:].lstrip("\\/")
-        return os.path.join(home, "Downloads", rel)
-    elif p_lower == "documents" or p_lower.startswith("documents\\") or p_lower.startswith("documents/"):
-        rel = p[9:].lstrip("\\/")
-        return os.path.join(home, "Documents", rel)
-    elif p_lower == "home" or p_lower.startswith("home\\") or p_lower.startswith("home/"):
-        rel = p[4:].lstrip("\\/")
-        return os.path.join(home, rel)
-        
-    return os.path.abspath(p)
+
+    # Si ya es una ruta absoluta, devolver tal cual
+    if os.path.isabs(p):
+        return p
+
+    # Mapa de palabras clave → carpetas reales (inglés y español)
+    _FOLDER_MAP = {
+        # Escritorio
+        "desktop": "Desktop", "escritorio": "Desktop",
+        # Descargas
+        "downloads": "Downloads", "descargas": "Downloads",
+        # Documentos
+        "documents": "Documents", "documentos": "Documents",
+        # Imágenes
+        "pictures": "Pictures", "imagenes": "Pictures", "imágenes": "Pictures", "images": "Pictures",
+        # Música
+        "music": "Music", "musica": "Music", "música": "Music",
+        # Videos
+        "videos": "Videos", "video": "Videos",
+        # Home
+        "home": "",
+    }
+
+    # Separar la primera parte del path del resto
+    parts = p.replace("\\", "/").split("/", 1)
+    first = parts[0].lower()
+    rest  = parts[1] if len(parts) > 1 else ""
+
+    if first in _FOLDER_MAP:
+        base_folder = _FOLDER_MAP[first]
+        base = os.path.join(home, base_folder) if base_folder else home
+        return os.path.join(base, rest) if rest else base
+
+    # Si la primera parte no es una palabra clave conocida,
+    # buscar la carpeta en ubicaciones comunes del usuario
+    search_roots = [
+        os.path.join(home, "Desktop"),
+        os.path.join(home, "Downloads"),
+        os.path.join(home, "Documents"),
+        home,
+    ]
+    for root in search_roots:
+        candidate = os.path.join(root, p)
+        if os.path.exists(candidate):
+            return candidate
+        # Buscar subcarpeta cuyo nombre coincida (sin distinguir mayúsc./espacios vs _)
+        first_norm = first.replace(" ", "_").replace("-", "_")
+        if os.path.isdir(root):
+            for folder in os.listdir(root):
+                if folder.lower().replace(" ", "_").replace("-", "_") == first_norm:
+                    base = os.path.join(root, folder)
+                    return os.path.join(base, rest) if rest else base
+
+    # Fallback: resolver relativo al Escritorio para no mezclar con el directorio de JARVIS
+    return os.path.join(home, "Desktop", p)
 
 def file_controller(parameters: dict, player=None) -> str:
     """
@@ -100,11 +140,24 @@ def file_controller(parameters: dict, player=None) -> str:
 
         # 2. CREATE FILE
         elif action in ("create_file", "write"):
-            # Ensure folder exists
-            os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+            # Si el path resuelto es una carpeta (no tiene nombre de archivo), usar Desktop por defecto
+            if os.path.isdir(resolved_path) or not os.path.splitext(resolved_path)[1]:
+                # Intentar extraer nombre de archivo del path_raw original
+                raw_base = os.path.basename(path_raw.strip("/\\"))
+                if raw_base and "." in raw_base:
+                    resolved_path = os.path.join(os.path.expanduser("~/Desktop"), raw_base)
+                else:
+                    # Generar nombre por defecto en el Escritorio
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    resolved_path = os.path.join(os.path.expanduser("~/Desktop"), f"archivo_{timestamp}.txt")
+
+            dir_part = os.path.dirname(resolved_path)
+            if dir_part:
+                os.makedirs(dir_part, exist_ok=True)
+
             with open(resolved_path, "w", encoding="utf-8") as f:
                 f.write(content or "")
-            msg = f"Archivo creado exitosamente: '{os.path.basename(resolved_path)}'."
+            msg = f"Archivo creado exitosamente: '{os.path.basename(resolved_path)}' en '{os.path.dirname(resolved_path)}'."
             if player:
                 player.write_log(f"📄 {msg}")
             return msg

@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import time
 from pathlib import Path
 
 # Load config early to determine GPU acceleration settings
@@ -157,6 +158,60 @@ _patch_settings_ui()
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt,
 )
+from memory.memory_engine import (
+    record_turn, remember as engine_remember,
+    get_context_block, clear_recent_turns, get_stats as memory_stats,
+)
+
+# ── Mejoras integradas (logger, quota, tasks, sandbox, panel, hotkey) ─────────
+try:
+    from core.jarvis_logger import (
+        log_info as _jlog_info, log_warn as _jlog_warn,
+        log_error as _jlog_error, log_tool as _jlog_tool,
+        log_session as _jlog_session, log_audio as _jlog_audio,
+    )
+except Exception:
+    def _jlog_info(*a, **k): pass
+    def _jlog_warn(*a, **k): pass
+    def _jlog_error(*a, **k): pass
+    def _jlog_tool(*a, **k): pass
+    def _jlog_session(*a, **k): pass
+    def _jlog_audio(*a, **k): pass
+
+try:
+    from core.quota_manager import is_quota_error as _is_quota_error, mark_exhausted as _mark_quota
+except Exception:
+    def _is_quota_error(e): return False
+    def _mark_quota(*a, **k): pass
+
+try:
+    from core.task_queue import (
+        submit as _task_submit, list_tasks as _task_list,
+        summary_for_voice as _task_voice_summary,
+        set_notify_callback as _task_set_notify,
+    )
+except Exception:
+    def _task_submit(*a, **k): return None
+    def _task_list(*a, **k): return []
+    def _task_voice_summary(): return "Sistema de tareas no disponible."
+    def _task_set_notify(cb): pass
+
+try:
+    from core.sandbox import classify_command as _sandbox_cmd, classify_paths as _sandbox_paths
+except Exception:
+    def _sandbox_cmd(c): return None
+    def _sandbox_paths(o, p): return None
+
+try:
+    from core.activity_panel import ActivityPanel as _ActivityPanel, position_panel as _position_panel
+except Exception:
+    _ActivityPanel = None
+    def _position_panel(p): pass
+
+try:
+    from core.global_hotkey import register_attention_hotkey as _register_hotkey
+except Exception:
+    def _register_hotkey(*a, **k): return False
 
 try:
     from actions.file_processor import file_processor
@@ -273,6 +328,10 @@ try:
 except ImportError:
     whatsapp = None
 try:
+    from actions.netflix_control   import netflix_control
+except ImportError:
+    netflix_control = None
+try:
     from actions.user_profile      import user_profile, record_action
 except ImportError:
     user_profile = None; record_action = None
@@ -364,6 +423,50 @@ try:
     from actions.openrouter_agent  import openrouter_agent
 except ImportError:
     openrouter_agent = None
+try:
+    from actions.deepseek_agent    import deepseek_agent
+except ImportError:
+    deepseek_agent = None
+try:
+    from actions.deep_research     import deep_research
+except ImportError:
+    deep_research = None
+try:
+    from actions.pair_programming  import pair_programming
+except ImportError:
+    pair_programming = None
+try:
+    from actions.notion_control    import notion_control
+except ImportError:
+    notion_control = None
+try:
+    from actions.git_control       import git_control
+except ImportError:
+    git_control = None
+try:
+    from actions.desktop           import desktop_control
+except ImportError:
+    desktop_control = None
+try:
+    from actions.codebase          import codebase
+except ImportError:
+    codebase = None
+try:
+    from actions.smart_home        import smart_home
+except ImportError:
+    smart_home = None
+try:
+    from actions.arca_invoice      import arca_invoice
+except ImportError:
+    arca_invoice = None
+try:
+    from actions.tiktok_analyzer   import tiktok_analyzer
+except ImportError:
+    tiktok_analyzer = None
+try:
+    from actions.flight_finder     import flight_finder
+except ImportError:
+    flight_finder = None
 
 
 
@@ -590,14 +693,26 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "web_search",
-        "description": "Searches the web for any information.",
+        "description": (
+            "Searches the web for any information. Returns titles, snippets and URLs of real sources. "
+            "Set with_citations=true when the user wants verifiable sources or asks 'where did you read that', "
+            "'cite your sources', 'según qué fuente', or for any factual/research query where citations help."
+        ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query":  {"type": "STRING", "description": "Search query"},
                 "mode":   {"type": "STRING", "description": "search (default) or compare"},
                 "items":  {"type": "ARRAY", "items": {"type": "STRING"}, "description": "Items to compare"},
-                "aspect": {"type": "STRING", "description": "price | specs | reviews"}
+                "aspect": {"type": "STRING", "description": "price | specs | reviews"},
+                "with_citations": {
+                    "type": "BOOLEAN",
+                    "description": "True to return formatted results with explicit source URLs the user can verify."
+                },
+                "max_results": {
+                    "type": "INTEGER",
+                    "description": "Number of results to return (1-10). Default 5."
+                }
             },
             "required": ["query"]
         }
@@ -618,22 +733,55 @@ TOOL_DECLARATIONS = [
         "description": (
             "Integración completa con WhatsApp. "
             "SIEMPRE usar para CUALQUIER pedido de WhatsApp: enviar mensajes, "
-            "enviar imágenes/archivos, leer conversaciones, ver mensajes sin leer, "
+            "enviar imágenes, enviar documentos/archivos (PDF, Word, Excel, ZIP, etc.), "
+            "leer conversaciones, ver mensajes sin leer, "
             "guardar/listar contactos con su número de teléfono. "
             "Para enviar, primero verificar si el contacto está guardado con su teléfono. "
-            "Si no está, pedir el número al usuario o usar add_contact primero."
+            "Si no está, pedir el número al usuario o usar add_contact primero. "
+            "Para enviar un documento usar action='send_document' con file_path=ruta del archivo."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":    {"type": "STRING",  "description": "send | send_image | read | unread | add_contact | list_contacts | delete_contact"},
-                "receiver":  {"type": "STRING",  "description": "Nombre del contacto o número de teléfono con código de país (ej: 5491155551234)"},
-                "message":   {"type": "STRING",  "description": "Texto del mensaje a enviar"},
-                "image_path":{"type": "STRING",  "description": "Ruta de la imagen para send_image"},
-                "caption":   {"type": "STRING",  "description": "Descripción de la imagen (opcional)"},
-                "count":     {"type": "INTEGER", "description": "Cantidad de mensajes a leer (default: 10)"},
-                "name":      {"type": "STRING",  "description": "Nombre del contacto para add_contact/delete_contact"},
-                "phone":     {"type": "STRING",  "description": "Número de teléfono con código de país (ej: 5491155551234) para add_contact"},
+                "action":     {"type": "STRING",  "description": "send | send_image | send_document | read | unread | add_contact | list_contacts | delete_contact"},
+                "receiver":   {"type": "STRING",  "description": "Nombre del contacto o número de teléfono con código de país (ej: 5215512345678)"},
+                "message":    {"type": "STRING",  "description": "Texto del mensaje a enviar (para action=send)"},
+                "image_path": {"type": "STRING",  "description": "Ruta de la imagen (para action=send_image). Ej: 'desktop/foto.png'"},
+                "file_path":  {"type": "STRING",  "description": "Ruta del documento a enviar (para action=send_document). Ej: 'documentos/reporte.pdf', 'desktop/factura.xlsx'"},
+                "caption":    {"type": "STRING",  "description": "Descripción/caption para imagen o documento (opcional)"},
+                "count":      {"type": "INTEGER", "description": "Cantidad de mensajes a leer (default: 10)"},
+                "name":       {"type": "STRING",  "description": "Nombre del contacto para add_contact/delete_contact"},
+                "phone":      {"type": "STRING",  "description": "Número de teléfono con código de país (ej: 5215512345678) para add_contact"},
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "netflix_control",
+        "description": (
+            "Control COMPLETO e inteligente de Netflix. "
+            "USA SIEMPRE para cualquier pedido relacionado con Netflix: abrir, elegir perfil, buscar películas/series, reproducir. "
+            "Puede seleccionar el perfil de usuario automáticamente usando visión de IA. "
+            "Acciones: play (abrir + perfil + buscar + reproducir), open (solo abrir con perfil), "
+            "select_profile (cambiar perfil), search (buscar sin reproducir), "
+            "pause (pausar/reanudar), forward (adelantar), back (retroceder), "
+            "set_profile (guardar perfil por defecto). "
+            "El perfil por defecto es 'Jorge' (guardado automáticamente). "
+            "Ejemplos: 'pon Inception en Netflix' → action=play content='Inception', "
+            "'abre Netflix con el perfil Jorge' → action=open profile='Jorge', "
+            "'adelanta 2 minutos en Netflix' → action=forward amount='2 minutos'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action":  {"type": "STRING",
+                            "description": "play | open | select_profile | search | pause | forward | back | set_profile"},
+                "profile": {"type": "STRING",
+                            "description": "Nombre del perfil de Netflix (ej: 'Jorge'). Si se omite usa el guardado."},
+                "content": {"type": "STRING",
+                            "description": "Nombre de la película o serie a reproducir (ej: 'Inception', 'Narcos', 'Breaking Bad')."},
+                "amount":  {"type": "STRING",
+                            "description": "Tiempo a adelantar o retroceder: 'un minuto', '30 segundos', '2 minutos'. Para forward/back."},
             },
             "required": ["action"]
         }
@@ -723,17 +871,38 @@ TOOL_DECLARATIONS = [
     {
         "name": "browser_control",
         "description": (
-            "Controla el navegador activo del usuario (Chrome, Edge, Firefox, etc.) sin abrir uno nuevo. "
-            "Usa esta herramienta cuando el usuario te pida interactuar con la web. "
-            "Acciones soportadas: navegar a una URL, buscar en Google, abrir o cerrar pestañas, y scrollear."
+            "Controla el navegador activo (Chrome, Edge, Firefox, Brave) sin abrir uno nuevo. "
+            "USA SIEMPRE para controlar videos/multimedia en el navegador. "
+            "NAVEGACIÓN: go_to | search | new_tab | close_tab | scroll. "
+            "MULTIMEDIA (video/audio): media_skip_forward (adelantar), media_skip_backward (retroceder), "
+            "media_play_pause (pausar/reproducir), media_mute (silenciar), media_fullscreen (pantalla completa), "
+            "media_speed_up (más rápido), media_speed_down (más lento), media_restart (reiniciar), "
+            "media_volume_up (subir volumen del video), media_volume_down (bajar volumen del video). "
+            "Funciona en YouTube, Netflix, Twitch, y CUALQUIER sitio con video HTML5. "
+            "Ejemplos: 'adelanta un minuto' → action=media_skip_forward amount='1 minuto', "
+            "'retrocede 30 segundos' → action=media_skip_backward amount='30 segundos', "
+            "'pausa el video' → action=media_play_pause."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "Acciones permitidas: go_to | search | new_tab | close_tab | scroll"},
-                "url":         {"type": "STRING", "description": "URL para las acciones go_to o new_tab"},
-                "query":       {"type": "STRING", "description": "Término de búsqueda para la acción search"},
-                "direction":   {"type": "STRING", "description": "Dirección de scroll: up | down (solo para scroll)"}
+                "action":    {"type": "STRING",
+                              "description": (
+                                  "Acción a ejecutar. "
+                                  "Navegación: go_to | search | new_tab | close_tab | scroll. "
+                                  "Multimedia: media_skip_forward | media_skip_backward | media_play_pause | "
+                                  "media_mute | media_fullscreen | media_speed_up | media_speed_down | "
+                                  "media_restart | media_volume_up | media_volume_down."
+                              )},
+                "url":       {"type": "STRING", "description": "URL para go_to o new_tab"},
+                "query":     {"type": "STRING", "description": "Término de búsqueda para search"},
+                "direction": {"type": "STRING", "description": "Dirección de scroll: up | down"},
+                "amount":    {"type": "STRING",
+                              "description": (
+                                  "Cantidad de tiempo para adelantar/retroceder. "
+                                  "Acepta lenguaje natural: 'un minuto', '2 minutos 30 segundos', '45 segundos', '90'. "
+                                  "Usado por media_skip_forward y media_skip_backward."
+                              )},
             },
             "required": ["action"]
         }
@@ -848,7 +1017,7 @@ TOOL_DECLARATIONS = [
         "description": (
             "Executes complex multi-step tasks requiring multiple different tools. "
             "Examples: 'research X and save to file', 'find and organize files'. "
-            "DO NOT use for single commands. NEVER use for Steam/Epic — use game_updater."
+            "DO NOT use for single commands."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -887,11 +1056,11 @@ TOOL_DECLARATIONS = [
     {
         "name": "game_updater",
         "description": (
-            "THE ONLY tool for ANY Steam or Epic Games request. "
-            "Use for: installing, downloading, updating games, listing installed games, "
-            "checking download status, scheduling updates. "
-            "ALWAYS call directly for any Steam/Epic/game request. "
-            "NEVER use agent_task, browser_control, or web_search for Steam/Epic."
+            "Manages Steam and Epic Games library: list installed games, "
+            "update/install/download a game, check download status, launch a specific game. "
+            "Use for: 'cuántos juegos tengo en Steam', 'actualiza X', 'instala AppID Y', "
+            "'qué juegos tengo instalados', 'lanza [juego]'. "
+            "DO NOT use for 'abre Steam' (use open_app instead)."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -935,6 +1104,127 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {},
+        }
+    },
+    {
+        "name": "pair_programming",
+        "description": (
+            "Activar / desactivar modo 'pair programmer'. Cuando está activo, JARVIS captura "
+            "la pantalla del IDE cada N segundos, analiza el código, y reporta problemas en el "
+            "panel de actividad sin interrumpir la voz del usuario. "
+            "Usar cuando el usuario diga: 'modo programador', 'pair programming', 'ayúdame a programar', "
+            "'observa mi código', 'sé mi copiloto', o explícitamente lo pida."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'start' para activar, 'stop' para desactivar, 'status' para consultar",
+                    "enum": ["start", "stop", "status"]
+                },
+                "interval_s": {
+                    "type": "INTEGER",
+                    "description": "Cada cuántos segundos analizar (10-120). Default 25."
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "focus_mode",
+        "description": (
+            "Activar o desactivar el modo concentración / no molestar. "
+            "Cuando está activo, JARVIS suprime notificaciones no críticas, "
+            "no envía sugerencias proactivas, y vision_guardian queda silenciado. "
+            "Solo eventos marcados como críticos (correos urgentes, alarmas) interrumpen. "
+            "Usar cuando el usuario diga: 'modo concentración', 'modo focus', 'no me molestes', "
+            "'voy a trabajar X horas', 'silencio'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'enable' para activar, 'disable' para desactivar, 'status' para consultar",
+                    "enum": ["enable", "disable", "status"]
+                },
+                "duration_minutes": {
+                    "type": "INTEGER",
+                    "description": "Duración en minutos (solo para enable). Default 60."
+                },
+                "reason": {
+                    "type": "STRING",
+                    "description": "Razón opcional (ej: 'trabajo profundo', 'reunión')"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "task_status",
+        "description": (
+            "Reports the status of background tasks JARVIS is running. "
+            "Call this when the user asks '¿en qué vas?', '¿cómo va la tarea?', "
+            "'qué estás haciendo', or wants a status update on long-running operations. "
+            "Returns a human-readable summary."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'list' to see running tasks, 'summary' for a brief voice summary",
+                    "enum": ["list", "summary"]
+                }
+            }
+        }
+    },
+    {
+        "name": "show_activity_panel",
+        "description": (
+            "Shows or hides the floating activity panel that displays the current tool, "
+            "running tasks, and step-by-step plan. Use when the user asks to see what "
+            "JARVIS is doing, the activity panel, or to hide it."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "show": {
+                    "type": "BOOLEAN",
+                    "description": "true to show, false to hide"
+                }
+            }
+        }
+    },
+    {
+        "name": "usage_dashboard",
+        "description": (
+            "Muestra el dashboard de uso de JARVIS: top herramientas, errores frecuentes, "
+            "latencias, estado de memoria y de proveedores. Usar cuando el usuario diga "
+            "'dashboard', 'estadísticas de uso', '¿qué tanto te uso?', 'reporte de uso'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'text' (default) para resumen verbal, 'html' para holograma visual",
+                    "enum": ["text", "html"]
+                }
+            }
+        }
+    },
+    {
+        "name": "system_diagnostics",
+        "description": (
+            "Returns diagnostic info about JARVIS internals: memory stats, "
+            "log sizes, quota state of AI providers. Use when user asks for "
+            "system status, diagnostics, or 'cómo estás'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {}
         }
     },
     {
@@ -1289,6 +1579,31 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "notion_control",
+        "description": (
+            "Integración completa con Notion: buscar páginas, leer contenido, crear páginas, "
+            "agregar contenido, consultar bases de datos, actualizar y archivar páginas. "
+            "Usar para: 'buscar en Notion', 'crear una página en Notion', 'leer mi nota de Notion', "
+            "'agregar a mi base de datos de Notion', 'qué tengo guardado en Notion sobre X'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action":      {"type": "STRING",  "description": "search | read | create | append | query | update | archive | setup"},
+                "query":       {"type": "STRING",  "description": "Texto a buscar (action=search)"},
+                "page_id":     {"type": "STRING",  "description": "ID de la página de Notion"},
+                "database_id": {"type": "STRING",  "description": "ID de la base de datos de Notion"},
+                "parent_id":   {"type": "STRING",  "description": "ID de la página padre o database donde crear"},
+                "title":       {"type": "STRING",  "description": "Título de la nueva página"},
+                "content":     {"type": "STRING",  "description": "Contenido de la página (párrafos separados por \\n)"},
+                "block_type":  {"type": "STRING",  "description": "Tipo de bloque al agregar: paragraph | bulleted_list_item | numbered_list_item | to_do | heading_1 | heading_2 | quote"},
+                "count":       {"type": "INTEGER", "description": "Cantidad máxima de resultados (default: 10)"},
+                "archived":    {"type": "BOOLEAN", "description": "Si archivar la página (action=update)"},
+            },
+            "required": ["action"]
+        }
+    },
+    {
         "name": "knowledge_base",
         "description": (
             "Segundo cerebro / base de conocimiento personal. "
@@ -1520,60 +1835,92 @@ TOOL_DECLARATIONS = [
     {
         "name": "document_creator",
         "description": (
-            "Creates Word documents (.docx) or Excel spreadsheets (.xlsx) locally, "
-            "OR Google Docs / Google Sheets in the cloud. "
-            "Use when the user asks to create a document, report, letter, table, spreadsheet, "
-            "budget, list, or any file with structured content. "
-            "For documents: provide title and content (use ## for headings, - for bullet lists). "
-            "For spreadsheets: provide title and sheets with headers and rows. "
-            "Always call this tool — never just say you created it."
+            "Crea documentos Word (.docx) o Excel (.xlsx) profesionales con portada, índice, "
+            "normas APA 7 / Chicago / MLA / profesional, cabeceras, pies de página, "
+            "estilos académicos, callout boxes, tablas y referencias. "
+            "Usar para: documentos de investigación, reportes, trabajos académicos, cartas, "
+            "presupuestos, presentaciones de contenido, cualquier archivo estructurado. "
+            "SIEMPRE usar content con el texto completo en markdown extendido. "
+            "SIEMPRE llamar esta herramienta — nunca solo decir que lo creaste."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": (
-                        "word — create a local .docx Word file | "
-                        "excel — create a local .xlsx Excel file | "
-                        "google_doc — create a Google Doc in the cloud | "
-                        "google_sheet — create a Google Sheet in the cloud"
-                    )
+                    "description": "word | excel | text. Para documentos académicos/profesionales usar 'word'."
                 },
                 "title": {
                     "type": "STRING",
-                    "description": "Title or filename of the document/spreadsheet"
+                    "description": "Título del documento (también usado como nombre de archivo)"
+                },
+                "norm": {
+                    "type": "STRING",
+                    "description": (
+                        "Norma de formato: "
+                        "apa o apa7 — Times New Roman 12pt, doble espacio, márgenes 2.54cm, headings APA 7 | "
+                        "professional — Calibri, headings azules con línea, estilo corporativo | "
+                        "academic — Times New Roman, estilo académico general | "
+                        "chicago | mla. Default: professional"
+                    )
+                },
+                "cover": {
+                    "type": "STRING",
+                    "description": (
+                        "JSON con datos de la portada. Campos disponibles: "
+                        "institution (universidad/empresa), title (título), subtitle, "
+                        "authors o author (nombre(s) del autor), course (materia), "
+                        "professor o instructor, department, date. "
+                        'Ejemplo: {"institution":"UNAM","title":"Métodos Numéricos",'
+                        '"authors":"Juan Pérez","course":"Ing. Civil","date":"Junio 2026"}'
+                    )
                 },
                 "content": {
                     "type": "STRING",
                     "description": (
-                        "For word / google_doc: full text content. "
-                        "Use ## Section for main headings, # SubSection for sub-headings, "
-                        "- item for bullet points, blank line between paragraphs."
+                        "Contenido completo en markdown extendido. Sintaxis disponible:\n"
+                        "# Título sección (H1)\n"
+                        "## Subtítulo (H2)\n"
+                        "### Sub-subtítulo (H3)\n"
+                        "Párrafo normal (texto justificado)\n"
+                        "- Elemento de lista con viñeta\n"
+                        "1. Elemento de lista numerada\n"
+                        "> Cita en bloque (indentada, cursiva)\n"
+                        "**negrita** _cursiva_ ***negrita+cursiva***\n"
+                        "[BOX title=\"Título\"]texto del recuadro destacado[/BOX]\n"
+                        "[TABLE]Col1|Col2\nFila1A|Fila1B\nFila2A|Fila2B[/TABLE]\n"
+                        "[ABSTRACT]texto del resumen[/ABSTRACT]\n"
+                        "[REFERENCES]\nAutor, A. (2024). Título. Editorial.\n[/REFERENCES]\n"
+                        "[TOC] — inserta tabla de contenidos\n"
+                        "--- — salto de página"
                     )
+                },
+                "header": {
+                    "type": "STRING",
+                    "description": "Texto para la cabecera de cada página. Ej: 'Métodos Numéricos | Tema 6'"
+                },
+                "toc": {
+                    "type": "BOOLEAN",
+                    "description": "Si incluir tabla de contenidos automática al inicio (default: false)"
                 },
                 "sheets": {
                     "type": "ARRAY",
-                    "description": (
-                        "For excel / google_sheet: list of sheet objects. "
-                        "Each object has: name (string), headers (array of strings), "
-                        "rows (array of arrays with cell values)."
-                    ),
+                    "description": "Para Excel: lista de hojas. Cada objeto: {name, headers[], rows[][]}",
                     "items": {
                         "type": "OBJECT",
                         "properties": {
-                            "name":    {"type": "STRING", "description": "Sheet tab name"},
-                            "headers": {"type": "ARRAY",  "items": {"type": "STRING"}, "description": "Column headers"},
-                            "rows":    {"type": "ARRAY",  "items": {"type": "ARRAY", "items": {"type": "STRING"}}, "description": "Data rows"}
+                            "name":    {"type": "STRING"},
+                            "headers": {"type": "ARRAY", "items": {"type": "STRING"}},
+                            "rows":    {"type": "ARRAY", "items": {"type": "ARRAY", "items": {"type": "STRING"}}}
                         }
                     }
                 },
                 "save_path": {
                     "type": "STRING",
-                    "description": "Optional: full file path to save locally (e.g. C:/Users/User/Desktop/report.docx). Defaults to ~/Documents/"
+                    "description": "Carpeta donde guardar (desktop, documentos, o ruta absoluta). Default: Escritorio"
                 }
             },
-            "required": ["action", "title"]
+            "required": ["action", "title", "content"]
         }
     },
     {
@@ -1759,24 +2106,125 @@ TOOL_DECLARATIONS = [
     {
         "name": "openrouter_agent",
         "description": (
-            "Delega una tarea intelectualmente compleja, de análisis o redacción larga a OpenRouter "
-            "(un motor de texto alternativo). "
-            "Usar cuando el usuario pida: 'usa openrouter para esto', 'consulta a claude', 'usa otro modelo', "
-            "'analiza este código largo', 'redacta un ensayo', o cuando percibas que la tarea es puramente de texto avanzado."
+            "Agente de REDACCIÓN Y TEXTO GENERAL — usa DeepSeek-Chat (V3), rápido y fluido. "
+            "USA PARA: redactar textos, cartas, correos, ensayos, resúmenes, traducciones, "
+            "explicaciones largas, recetas, guiones, ideas creativas, respuestas extensas. "
+            "REGLA: si la respuesta que necesitás supera 3 frases propias → usá este tool. "
+            "NO usar para matemáticas complejas, código difícil ni problemas que requieran razonar paso a paso. "
+            "Ejemplos: 'redacta una carta', 'explícame qué es X', 'escribe un correo', 'resume esto', "
+            "'dame ideas para', 'traduce este texto'."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query": {
                     "type": "STRING",
-                    "description": "El prompt o instrucción completa para el agente de OpenRouter"
+                    "description": "El texto o instrucción completa para redactar o responder"
                 },
                 "model": {
                     "type": "STRING",
-                    "description": "Opcional. Modelo a usar, por defecto google/gemini-2.5-flash"
+                    "description": "Opcional. Deja vacío para usar el modelo por defecto (deepseek-chat)."
                 }
             },
             "required": ["query"]
+        }
+    },
+    {
+        "name": "deepseek_agent",
+        "description": (
+            "Agente de RAZONAMIENTO PROFUNDO — usa DeepSeek-R1, piensa paso a paso antes de responder. "
+            "USA PARA: matemáticas, lógica, código complejo, algoritmos, análisis estratégicos, "
+            "debugging difícil, decisiones con múltiples variables, problemas que requieren razonar encadenado. "
+            "MÁS LENTO que openrouter_agent pero MUCHO MÁS PRECISO en problemas complejos. "
+            "NUNCA usar para redacción simple, preguntas generales ni conversación. "
+            "Ejemplos: 'resuelve esta ecuación', 'encuentra el bug en este código', "
+            "'analiza las pros y contras de', 'razona paso a paso por qué', "
+            "'dame una estrategia óptima para', 'usa deepseek para pensar esto'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "La pregunta o tarea completa para DeepSeek-R1"
+                },
+                "system_prompt": {
+                    "type": "STRING",
+                    "description": "Opcional. Contexto o rol especial para el razonamiento (ej: 'eres un experto en finanzas')"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "deep_research",
+        "description": (
+            "Genera un DOCUMENTO LARGO de investigación (10+ páginas, miles de palabras) "
+            "sobre cualquier tema, en formato Word profesional con portada, índice (TOC), "
+            "secciones desarrolladas a profundidad, referencias y formato APA/professional. "
+            "USAR cuando el usuario pida: 'investigación', 'reporte de N páginas', "
+            "'documento extenso/largo/detallado/profundo', 'tesis', 'monografía', "
+            "'ensayo largo', o cualquier solicitud que claramente exceda lo que un agente "
+            "normal puede generar de una sola pasada (>3 páginas). "
+            "Corre en SEGUNDO PLANO — devuelve un task_id inmediatamente y notifica al terminar. "
+            "Genera contenido por secciones independientes (sin límite de 1500 tokens del openrouter_agent), "
+            "produciendo documentos genuinamente largos. "
+            "NO usar para resúmenes cortos, respuestas simples, ni explicaciones de 1-2 párrafos "
+            "(eso es openrouter_agent). "
+            "Ejemplos: 'hazme un reporte de 20 páginas sobre la IA en la economía', "
+            "'redacta una investigación profunda sobre métodos numéricos', "
+            "'genera un ensayo largo sobre el cambio climático'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "topic": {
+                    "type": "STRING",
+                    "description": "Tema central de la investigación, lo más descriptivo posible"
+                },
+                "target_pages": {
+                    "type": "INTEGER",
+                    "description": "Número de páginas objetivo del documento final (3-60). Default 15."
+                },
+                "title": {
+                    "type": "STRING",
+                    "description": "Título corto para el nombre de archivo (sin .docx). Si no se da, se genera del topic."
+                },
+                "norm": {
+                    "type": "STRING",
+                    "description": (
+                        "Norma de formato. SIEMPRE usar 'professional' por defecto a menos que "
+                        "el usuario pida explícitamente APA, Chicago, MLA o académico. "
+                        "El formato 'professional' tiene portada con título azul grande, "
+                        "callouts coloreados, tablas y referencias bonitas — es lo que el usuario espera."
+                    ),
+                    "enum": ["professional", "apa7", "academic"]
+                },
+                "save_path": {
+                    "type": "STRING",
+                    "description": "Carpeta destino. Default 'desktop'."
+                },
+                "cover": {
+                    "type": "STRING",
+                    "description": (
+                        "JSON con metadatos de portada: "
+                        '{"institution":"...","title":"...","authors":"...","course":"...","date":"..."}. '
+                        "Si no se da, se genera mínima con el título."
+                    )
+                },
+                "style_hint": {
+                    "type": "STRING",
+                    "description": "Estilo: 'académico profesional' (default), 'ensayo', 'técnico', 'divulgativo'"
+                },
+                "background": {
+                    "type": "BOOLEAN",
+                    "description": (
+                        "true (default y RECOMENDADO) = corre en segundo plano, devuelve task_id. "
+                        "false = bloquea hasta terminar (puede tardar varios minutos)."
+                    )
+                }
+            },
+            "required": ["topic"]
         }
     },
     {
@@ -2129,6 +2577,16 @@ class JarvisLive:
         # Iniciar scheduler y motor de reglas en background al arrancar JARVIS
         start_runner(player=ui, speak=None)
         start_rules_runner(player=ui, speak=None)
+
+        # Wake word — se inicia SOLO cuando JARVIS entra en suspensión,
+        # para no competir con el micrófono de la sesión Gemini Live activa.
+        self._wake_word_available = False
+        try:
+            import core.wake_word as _ww_mod  # noqa: F401 — solo verificar disponibilidad
+            self._wake_word_available = True
+        except Exception:
+            pass
+
         self.out_queue      = None
         self._loop          = None
         self._is_speaking   = False
@@ -2137,10 +2595,79 @@ class JarvisLive:
         self.ui.on_text_command = self._on_text_command
         self.ui.on_stop_command = self._on_stop_pressed
         self.ui.on_config_saved = self._apply_config
+        self.ui.on_file_analyze = self._on_file_analyze
         self._turn_done_event: asyncio.Event | None = None
         self._api_1011_tool: str | None = None   # tracks tool name when 1011 hits
         self._reconnect_event: asyncio.Event | None = None
         self._first_connect = True  # flag for auto morning brief + guardian start
+
+        # ── Activity panel (PyQt) ────────────────────────────────────────────
+        self.activity_panel = None
+        if _ActivityPanel is not None:
+            try:
+                self.activity_panel = _ActivityPanel(parent=None)
+                _position_panel(self.activity_panel)
+                # No mostrar al inicio — el usuario lo abre con un comando
+                _jlog_info("Activity panel inicializado", category="system")
+            except Exception as e:
+                _jlog_error("Activity panel no se pudo crear", exc=e)
+
+        # ── Hotkey global Ctrl+Alt+J ─────────────────────────────────────────
+        def _on_attention_hotkey():
+            try:
+                _jlog_info("Hotkey de atención activado", category="audio")
+                # Forzar que JARVIS escuche: si está dormido, despertarlo
+                if getattr(self, "is_sleeping", False):
+                    self.is_sleeping = False
+                # Inyectar un ping para que responda
+                self._inject_text("(El usuario pulsó el atajo de atención. Diga 'Sí, señor.' brevemente y espere instrucciones.)")
+            except Exception as e:
+                _jlog_error("Fallo en handler de hotkey", exc=e)
+        try:
+            _register_hotkey(_on_attention_hotkey, combo="ctrl+alt+j")
+        except Exception:
+            pass
+
+        # ── Notificación de fin de tarea (task_queue) ────────────────────────
+        def _on_task_done(task):
+            try:
+                if task.status == "done":
+                    self._inject_text(
+                        f"(Tarea en segundo plano completada: '{task.title}'. "
+                        f"Notifíquele al usuario de manera breve.)"
+                    )
+                elif task.status == "failed":
+                    self._inject_text(
+                        f"(Tarea '{task.title}' falló: {task.error}. Reporte al usuario.)"
+                    )
+            except Exception:
+                pass
+        try:
+            _task_set_notify(_on_task_done)
+        except Exception:
+            pass
+
+        # ── Motor proactivo: sugerencias basadas en patrones ─────────────────
+        try:
+            from core.proactive_engine import start_loop as _proactive_start
+            def _on_proactive_suggestion(suggestion):
+                try:
+                    # No interrumpir si JARVIS está hablando o el usuario en turno
+                    if getattr(self, "_is_speaking", False) or getattr(self, "_is_transmitting_turn", False):
+                        return
+                    self._inject_text(
+                        f"(Sugerencia proactiva interna basada en patrones del usuario, score={suggestion.score}: "
+                        f"\"{suggestion.message}\" — usa esto solo si el momento es apropiado, "
+                        "y de manera breve. NO repitas la sugerencia si el usuario está claramente ocupado.)"
+                    )
+                except Exception:
+                    pass
+            _proactive_start(_on_proactive_suggestion, interval_s=900)   # cada 15min
+            _jlog_info("Motor proactivo iniciado", category="system")
+        except Exception as e:
+            _jlog_error("No se pudo iniciar motor proactivo", exc=e)
+
+        _jlog_session("init_complete")
 
     def _inject_text(self, text: str):
         """Thread-safe injection of a text message into the current live session."""
@@ -2152,6 +2679,50 @@ class JarvisLive:
                 ),
                 self._loop
             )
+
+    def _on_file_analyze(self, content: str, filename: str, path: str):
+        """
+        Called when the user clicks '📖 Analizar con JARVIS' in Files Drop.
+        Injects the file content into the live Gemini session so JARVIS can
+        read and respond to it.
+        """
+        if not self._loop or not self.session:
+            self.ui.write_log("⚠ JARVIS no está conectado. Intenta de nuevo en un momento.")
+            return
+
+        # ── Image files: send as inline_data ─────────────────────────────────
+        if content.startswith("__IMAGE_B64__"):
+            try:
+                _, rest    = content.split("__IMAGE_B64__", 1)
+                mime, b64  = rest.split("::", 1)
+                import base64
+                img_bytes  = base64.b64decode(b64)
+                text_part  = {"text": f"Analiza esta imagen que acabo de soltar: '{filename}'."}
+                image_part = {"inline_data": {"mime_type": mime, "data": b64}}
+                asyncio.run_coroutine_threadsafe(
+                    self.session.send_client_content(
+                        turns={"parts": [text_part, image_part]},
+                        turn_complete=True
+                    ),
+                    self._loop
+                )
+                self.ui.write_log(f"🖼 Imagen '{filename}' enviada a Gemini Vision.")
+            except Exception as e:
+                self.ui.write_log(f"⚠ Error enviando imagen: {e}")
+            return
+
+        # ── Text / document files ─────────────────────────────────────────────
+        # Build a clear instruction so Gemini knows what to do
+        prompt = (
+            f"El usuario acaba de soltar el archivo '{filename}' en la interfaz. "
+            f"A continuación está su contenido completo. Léelo, entiéndelo y "
+            f"espera instrucciones del usuario sobre qué hacer con él "
+            f"(resumir, analizar, editar, responder preguntas, etc.).\n\n"
+            f"{content}"
+        )
+        self._inject_text(prompt)
+        self.ui.write_log(f"📖 '{filename}' enviado a JARVIS ({len(content):,} chars). "
+                          f"Di qué quieres hacer con él.")
 
     def _apply_config(self, cfg: dict):
         """Called from UI thread when user saves settings. Triggers session reconnect."""
@@ -2423,8 +2994,6 @@ class JarvisLive:
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
 
-        memory     = load_memory()
-        mem_str    = format_memory_for_prompt(memory)
         sys_prompt = _load_system_prompt()
 
         # Refresh timezone from config each reconnect
@@ -2441,9 +3010,61 @@ class JarvisLive:
             f"Use this information to calculate exact times for reminders, scheduling, and answering time-related questions.\n\n"
         )
 
+        # Rich memory context (long-term + session history + recent turns)
+        rich_memory = get_context_block()
+        # Also keep backward compat with old memory_manager for habits/notes
+        old_mem = load_memory()
+        old_mem_str = format_memory_for_prompt(old_mem)
+
         parts = [time_ctx]
-        if mem_str:
-            parts.append(mem_str)
+        if rich_memory:
+            parts.append(rich_memory)
+        elif old_mem_str:
+            # Fallback if engine has nothing yet
+            parts.append(old_mem_str)
+
+        # ── Correcciones aprendidas (feedback de turnos previos) ──────────────
+        try:
+            from core.correction_learner import format_corrections_for_prompt
+            corr = format_corrections_for_prompt(limit=10)
+            if corr:
+                parts.append(corr)
+        except Exception:
+            pass
+
+        # ── Contexto inmediato pre-reconexión (si aplica) ─────────────────────
+        try:
+            from core.session_buffer import format_for_reinjection, is_recent_reconnect_context
+            if is_recent_reconnect_context() and not self._first_connect:
+                ctx = format_for_reinjection()
+                if ctx:
+                    parts.append(ctx)
+        except Exception:
+            pass
+
+        # ── Estado emocional del usuario (hint dinámico) ──────────────────────
+        try:
+            from core.emotion_detector import current_prompt_hint
+            ehint = current_prompt_hint()
+            if ehint:
+                parts.append(ehint)
+        except Exception:
+            pass
+
+        # ── Estado del modo focus ─────────────────────────────────────────────
+        try:
+            from core.focus_mode import status as _focus_status
+            fs = _focus_status()
+            if fs["active"]:
+                parts.append(
+                    f"[MODO CONCENTRACIÓN ACTIVO — {fs['remaining_min']}min restantes"
+                    + (f" ({fs['reason']})" if fs["reason"] else "")
+                    + "]\n  → Suprime sugerencias proactivas. Responde breve. "
+                    "Solo interrumpe el silencio si el usuario inicia turno o hay emergencia."
+                )
+        except Exception:
+            pass
+
         parts.append(sys_prompt)
 
         # Build SpeechConfig — try to set speaking rate for faster delivery
@@ -2539,8 +3160,23 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
+        # Tiempo inicial para medir duración
+        _tool_t0 = time.time()
+        _jlog_tool(name, args=args, success=True, result_preview="[started]")
+
         print(f"[JARVIS] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
+        # Show active tool in header indicator
+        try:
+            self.ui.set_active_tool(name)
+        except Exception:
+            pass
+        # Sync con activity panel
+        try:
+            if getattr(self, "activity_panel", None):
+                self.activity_panel.set_current_tool(name)
+        except Exception:
+            pass
 
 
 
@@ -2574,6 +3210,121 @@ class JarvisLive:
                 response={"result": "Apagando JARVIS. ¡Hasta luego, señor!"}
             )
 
+        if name == "pair_programming":
+            if pair_programming:
+                self.ui.write_log("🧑‍💻 Pair programming...")
+                # Pasar la propia instancia para que el módulo acceda al activity_panel
+                r = pair_programming(parameters=args, player=self)
+                result = r or "Acción de pair programming completada."
+            else:
+                result = "Módulo pair_programming no disponible."
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "focus_mode":
+            try:
+                from core.focus_mode import enable, disable, status as focus_status
+                action = (args.get("action") or "status").lower()
+                if action == "enable":
+                    dur = int(args.get("duration_minutes", 60))
+                    reason = args.get("reason", "")
+                    st = enable(duration_minutes=dur, reason=reason)
+                    result = (
+                        f"Modo concentración activado por {st['remaining_min']} minutos"
+                        + (f" — {reason}." if reason else ".")
+                        + " Estaré en silencio salvo emergencias, señor."
+                    )
+                elif action == "disable":
+                    disable()
+                    result = "Modo concentración desactivado. Vuelvo a estar atento."
+                else:
+                    st = focus_status()
+                    if st["active"]:
+                        result = f"Modo concentración activo, quedan {st['remaining_min']} minutos."
+                    else:
+                        result = "Modo concentración inactivo."
+            except Exception as e:
+                result = f"Error en focus_mode: {e}"
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "task_status":
+            action = (args.get("action") or "summary").lower()
+            if action == "list":
+                tasks = _task_list(limit=10)
+                if not tasks:
+                    result = "No hay tareas en curso ni recientes, señor."
+                else:
+                    lines = [f"- {t.title} [{t.status}] {int(t.duration_s())}s"
+                             for t in tasks]
+                    result = "Estado de tareas:\n" + "\n".join(lines)
+            else:
+                result = _task_voice_summary()
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "show_activity_panel":
+            show = bool(args.get("show", True))
+            try:
+                if self.activity_panel is not None:
+                    if show:
+                        self.activity_panel.show()
+                        result = "Panel de actividad mostrado, señor."
+                    else:
+                        self.activity_panel.hide()
+                        result = "Panel ocultado."
+                else:
+                    result = "El panel de actividad no está disponible en este sistema."
+            except Exception as e:
+                result = f"Error con el panel: {e}"
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "usage_dashboard":
+            try:
+                from core.usage_dashboard import collect_stats, format_text, format_html
+                action_kind = (args.get("action") or "text").lower()
+                stats = collect_stats()
+                if action_kind == "html":
+                    html = format_html(stats)
+                    # Mostrar como holograma
+                    self.ui._win._holo_sig.emit("", html)
+                    result = "Dashboard mostrado en el holograma, señor."
+                else:
+                    result = format_text(stats)
+            except Exception as e:
+                result = f"Error generando dashboard: {e}"
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "system_diagnostics":
+            try:
+                stats = memory_stats()
+                from core.jarvis_logger import get_stats as _log_stats
+                from core.quota_manager import get_status as _quota_status
+                _log_stats()  # warm
+                quota = _quota_status()
+                provider_parts = []
+                for p, s in quota.items():
+                    provider_parts.append(f"{p}({s.get('status','?')})")
+                lines = [
+                    f"MEMORIA: {stats.get('long_term_entries',0)} hechos, "
+                    f"{stats.get('recent_turns',0)} turnos recientes, "
+                    f"{stats.get('total_turns_logged',0)} turnos totales",
+                    f"PROVEEDORES: {', '.join(provider_parts)}",
+                ]
+                result = "Diagnóstico:\n" + "\n".join(lines)
+            except Exception as e:
+                result = f"Error en diagnóstico: {e}"
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
         if name == "show_hologram":
             url = args.get("url", "")
             html = args.get("html", "")
@@ -2591,7 +3342,9 @@ class JarvisLive:
             key      = args.get("key", "")
             value    = args.get("value", "")
             if key and value:
+                # Save to both old memory_manager (compat) and new engine
                 update_memory({category: {key: {"value": value}}})
+                engine_remember(category, key, value, source="jarvis_explicit")
                 print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
@@ -2627,6 +3380,24 @@ class JarvisLive:
                         except Exception:
                             break
                 self.set_speaking(False)
+                # Arrancar wake word AHORA que el micrófono quedó libre
+                if getattr(self, "_wake_word_available", False):
+                    try:
+                        from core.wake_word import start_wake_word
+                        def _on_wake():
+                            if getattr(self, "is_sleeping", False):
+                                # Detener wake word antes de retomar el micrófono
+                                try:
+                                    from core.wake_word import stop_wake_word
+                                    stop_wake_word()
+                                except Exception:
+                                    pass
+                                self.is_sleeping = False
+                                self.ui.set_state("LISTENING")
+                                self.ui.write_log("🎙 Wake word detectada — JARVIS activo")
+                        start_wake_word(on_wake=_on_wake)
+                    except Exception as _we:
+                        print(f"[WakeWord] No se pudo iniciar: {_we}")
                 result = "Entrando en suspensión absoluta. Cortando transmisión a la nube hasta escuchar 'JARVIS'."
 
             elif name == "weather_report":
@@ -2728,8 +3499,11 @@ class JarvisLive:
                         result = r or "Done."
 
             elif name == "desktop_control":
-                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: desktop_control(parameters=args, player=self.ui))
-                result = r or "Done."
+                if desktop_control is None:
+                    result = "Módulo desktop_control no disponible."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: desktop_control(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "code_helper":
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: code_helper(parameters=args, player=self.ui, speak=self.speak))
@@ -2750,8 +3524,8 @@ class JarvisLive:
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: web_search_action(parameters=args, player=self.ui))
                 result = r or "Done."
             elif name == "file_processor":
-                if not args.get("file_path") and self.ui.current_file:
-                    args["file_path"] = self.ui.current_file
+                if not args.get("file_path") and getattr(self.ui, "current_file_path", ""):
+                    args["file_path"] = self.ui.current_file_path
                 r = await loop.run_in_executor(
                     _TOOL_EXECUTOR,
                     lambda: file_processor(parameters=args, player=self.ui, speak=self.speak)
@@ -2768,12 +3542,18 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "game_updater":
-                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
-                result = r or "Done."
+                if game_updater is None:
+                    result = "Módulo game_updater no disponible. Usa open_app para abrir Steam o Epic."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: game_updater(parameters=args, player=self.ui, speak=self.speak))
+                    result = r or "Done."
 
             elif name == "flight_finder":
-                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: flight_finder(parameters=args, player=self.ui))
-                result = r or "Done."
+                if flight_finder is None:
+                    result = "Módulo flight_finder no disponible."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: flight_finder(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "google_calendar":
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: google_calendar(parameters=args, player=self.ui))
@@ -2816,12 +3596,18 @@ class JarvisLive:
                 result = r or "Done."
 
             elif name == "git_control":
-                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: git_control(parameters=args, player=self.ui))
-                result = r or "Done."
+                if git_control is None:
+                    result = "Módulo git_control no disponible."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: git_control(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "codebase":
-                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: codebase(parameters=args, player=self.ui))
-                result = r or "Done."
+                if codebase is None:
+                    result = "Módulo codebase no disponible."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: codebase(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "knowledge_base":
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: knowledge_base(parameters=args, player=self.ui))
@@ -2829,6 +3615,10 @@ class JarvisLive:
 
             elif name == "whatsapp":
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: whatsapp(parameters=args, player=self.ui))
+                result = r or "Done."
+
+            elif name == "netflix_control":
+                r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: netflix_control(parameters=args, player=self.ui))
                 result = r or "Done."
 
             elif name == "social_media":
@@ -2867,7 +3657,12 @@ class JarvisLive:
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: accessibility(parameters=args, player=self.ui))
                 result = r or "Done."
 
-
+            elif name == "notion_control":
+                if notion_control is None:
+                    result = "Módulo Notion no disponible."
+                else:
+                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: notion_control(parameters=args, player=self.ui))
+                    result = r or "Done."
 
             elif name == "morning_brief":
                 r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: morning_brief(parameters=args, player=self.ui))
@@ -2890,7 +3685,7 @@ class JarvisLive:
                     # Se delega la tarea a OpenRouter
                     self.ui.write_log("🤖 Delegando tarea a OpenRouter...")
                     r = await loop.run_in_executor(
-                        _TOOL_EXECUTOR, 
+                        _TOOL_EXECUTOR,
                         lambda: openrouter_agent(
                             query=args.get("query", ""),
                             model=args.get("model", "google/gemini-2.5-flash")
@@ -2899,6 +3694,31 @@ class JarvisLive:
                     result = r or "Error al procesar con OpenRouter."
                 else:
                     result = "Módulo openrouter_agent no encontrado."
+
+            elif name == "deepseek_agent":
+                if deepseek_agent:
+                    self.ui.write_log("🧠 DeepSeek-R1 pensando...")
+                    r = await loop.run_in_executor(
+                        _TOOL_EXECUTOR,
+                        lambda: deepseek_agent(
+                            query=args.get("query", ""),
+                            system_prompt=args.get("system_prompt", None)
+                        )
+                    )
+                    result = r or "Error al procesar con DeepSeek."
+                else:
+                    result = "Módulo deepseek_agent no disponible."
+
+            elif name == "deep_research":
+                if deep_research:
+                    self.ui.write_log("📚 Iniciando investigación profunda en segundo plano...")
+                    r = await loop.run_in_executor(
+                        _TOOL_EXECUTOR,
+                        lambda: deep_research(parameters=args, player=self.ui)
+                    )
+                    result = r or "Investigación encolada."
+                else:
+                    result = "Módulo deep_research no disponible."
 
             elif name == "terminal_agent":
                 if terminal_agent:
@@ -2998,6 +3818,31 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
+        # Clear active tool indicator
+        try:
+            self.ui.set_active_tool("")
+        except Exception:
+            pass
+        try:
+            if getattr(self, "activity_panel", None):
+                self.activity_panel.set_current_tool("")
+        except Exception:
+            pass
+
+        # Logging estructurado del resultado
+        _dur_ms = int((time.time() - _tool_t0) * 1000)
+        _jlog_tool(name, args=args, result_preview=str(result)[:200],
+                   duration_ms=_dur_ms, success=True)
+
+        # Auto-holograma contextual basado en el resultado
+        try:
+            from core.hologram_helpers import auto_hologram_from_tool_result
+            holo_html = auto_hologram_from_tool_result(name, result, args)
+            if holo_html:
+                self.ui._win._holo_sig.emit("", holo_html)
+        except Exception as _holo_err:
+            _jlog_warn(f"auto-holograma falló para {name}: {_holo_err}")
+
         print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
         return types.FunctionResponse(
             id=fc.id, name=name,
@@ -3062,33 +3907,30 @@ class JarvisLive:
                     # El ruido base ambiental es el mínimo RMS de los últimos 5s
                     self._ambient_noise_floor = min(self._noise_floor_samples)
                 
-                ambient_floor = getattr(self, "_ambient_noise_floor", 0.001)
-                # Si el usuario configura una sensibilidad alta (umbral muy bajo < 0.001), respetamos su umbral exacto
-                # De lo contrario, usamos un multiplicador dinámico optimizado de 1.3 (antes 1.5) para mayor responsividad
-                if threshold < 0.0012:
-                    dynamic_threshold = threshold
-                else:
-                    dynamic_threshold = max(threshold, ambient_floor * 1.3)
-                
-                if rms > dynamic_threshold:
-                    self.last_speech_time = now
+                def _safe_put(q, item):
+                    try:
+                        q.put_nowait(item)
+                    except Exception:
+                        pass
 
-                # Si estamos dentro del tiempo de resaca (hangover) de 0.8s
-                if now - getattr(self, "last_speech_time", 0.0) < 0.8:
-                    data = indata.tobytes()
-                    def _safe_put(q, item):
-                        try:
-                            q.put_nowait(item)
-                        except Exception:
-                            pass
-                    
-                    # Transmitimos en tiempo real (0 latencia) sin bloqueos ni biometría
+                # Noise gate local: solo se aplica si threshold > 0.001
+                # Con threshold bajo (<= 0.001) se envía todo el audio y Gemini
+                # usa su propio VAD incorporado para detectar voz real.
+                if threshold <= 0.001:
+                    # Enviar siempre — VAD de Gemini filtra el silencio
                     loop.call_soon_threadsafe(
-                        _safe_put, self.out_queue, {"data": data, "mime_type": "audio/pcm"}
+                        _safe_put, self.out_queue, {"data": indata.tobytes(), "mime_type": "audio/pcm"}
                     )
                 else:
-                    # Descartar paquete en silencio para evitar alucinaciones en la nube
-                    pass
+                    # Noise gate local para threshold alto configurado por el usuario
+                    ambient_floor = getattr(self, "_ambient_noise_floor", 0.001)
+                    dynamic_threshold = max(threshold, ambient_floor * 1.3)
+                    if rms > dynamic_threshold:
+                        self.last_speech_time = now
+                    if now - getattr(self, "last_speech_time", 0.0) < 0.8:
+                        loop.call_soon_threadsafe(
+                            _safe_put, self.out_queue, {"data": indata.tobytes(), "mime_type": "audio/pcm"}
+                        )
             elif jarvis_speaking:
                 # When JARVIS is speaking, also update level (from playback perspective)
                 try:
@@ -3097,26 +3939,60 @@ class JarvisLive:
                 except Exception:
                     pass
 
+        # Leer mic_device de config (0 = default del sistema)
+        _mic_device = None
         try:
-            with sd.InputStream(
+            _cfg = {}
+            if API_CONFIG_PATH.exists():
+                _cfg = json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+            _dev_idx = int(_cfg.get("mic_device", -1))
+            if _dev_idx >= 0:
+                _mic_device = _dev_idx
+        except Exception:
+            pass
+
+        try:
+            _stream_kwargs: dict = dict(
                 samplerate=SEND_SAMPLE_RATE,
                 channels=CHANNELS,
                 dtype="int16",
                 blocksize=CHUNK_SIZE,
                 callback=callback,
-            ):
-                print("[JARVIS] 🎤 Mic stream open")
+            )
+            if _mic_device is not None:
+                _stream_kwargs["device"] = _mic_device
+            with sd.InputStream(**_stream_kwargs):
+                print(f"[JARVIS] 🎤 Mic stream open (device={_mic_device})")
                 while True:
                     await asyncio.sleep(0.01)  # 10ms — máxima responsividad del mic
         except Exception as e:
             print(f"[JARVIS] ❌ Mic: {e}")
-            raise
+            # Fallback: intentar con device default si el configurado falla
+            if _mic_device is not None:
+                print(f"[JARVIS] 🔄 Reintentando con device default...")
+                try:
+                    with sd.InputStream(
+                        samplerate=SEND_SAMPLE_RATE,
+                        channels=CHANNELS,
+                        dtype="int16",
+                        blocksize=CHUNK_SIZE,
+                        callback=callback,
+                    ):
+                        print("[JARVIS] 🎤 Mic stream open (default device)")
+                        while True:
+                            await asyncio.sleep(0.01)
+                except Exception as e2:
+                    print(f"[JARVIS] ❌ Mic fallback: {e2}")
+                    raise
+            else:
+                raise
 
     async def _receive_audio(self):
         print("[JARVIS] 👂 Recv iniciado")
         out_buf, in_buf = [], []
         _first_chunk   = True
         _last_tool     = None   # track which tool was executing when error hit
+        _tools_this_turn: list[str] = []   # tools called in current turn
 
         try:
             while True:
@@ -3147,12 +4023,44 @@ class JarvisLive:
                             self._stop_requested.clear()
                             if self._turn_done_event:
                                 self._turn_done_event.set()
-                            full_in = " ".join(in_buf).strip()
+                            full_in  = " ".join(in_buf).strip()
+                            full_out = " ".join(out_buf).strip()
                             if full_in:
                                 self.ui.write_log(f"Tú: {full_in}")
                                 self._fire_phrase_triggers(full_in)
-                            in_buf = []
+                            # ── Persist this turn to memory engine ────────────
+                            if full_in or full_out:
+                                import threading as _th
+                                _th.Thread(
+                                    target=record_turn,
+                                    args=(full_in, full_out, list(_tools_this_turn)),
+                                    daemon=True
+                                ).start()
+                                # Buffer volátil para recovery de contexto al reconectar
+                                try:
+                                    from core.session_buffer import push as _sb_push
+                                    _sb_push(full_in, full_out)
+                                except Exception:
+                                    pass
+                                # Detección de correcciones del usuario
+                                try:
+                                    from core.correction_learner import maybe_save_correction
+                                    _th.Thread(
+                                        target=maybe_save_correction,
+                                        args=(full_in, full_out),
+                                        daemon=True
+                                    ).start()
+                                except Exception:
+                                    pass
+                                # Detección de estado emocional del usuario
+                                try:
+                                    from core.emotion_detector import update_from_user_text
+                                    update_from_user_text(full_in)
+                                except Exception:
+                                    pass
+                            in_buf  = []
                             out_buf = []
+                            _tools_this_turn = []
                             _first_chunk = True
 
                     if response.tool_call:
@@ -3162,6 +4070,7 @@ class JarvisLive:
                         for fc in fcs:
                             print(f"[JARVIS] 📞 {fc.name}")
                             _last_tool = fc.name
+                            _tools_this_turn.append(fc.name)
                         async def _handle_tools(fcs_to_run):
                             nonlocal _last_tool
                             if len(fcs_to_run) > 1:
@@ -3284,6 +4193,12 @@ class JarvisLive:
                     reconnect_delay   = 1.0   # reset backoff on successful connection
                     consecutive_fails = 0
                     self._api_1011_tool = None   # clear 1011 tool tracker
+
+                    # Clear recent-turns buffer so conversational context is fresh
+                    try:
+                        clear_recent_turns()
+                    except Exception:
+                        pass
 
                     # ── First-connect extras ──────────────────────────────────
                     if self._first_connect:

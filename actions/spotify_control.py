@@ -58,11 +58,36 @@ def spotify_control(parameters: dict, player=None) -> str:
             elif action in ("prev", "previous", "back"):
                 sp.previous_track()
                 msg = "Canción anterior."
+            elif action in ("search", "buscar"):
+                # Search and display results, then play the first one
+                if query:
+                    results = sp.search(q=query, limit=5, type='track,artist,album')
+                    tracks = results.get('tracks', {}).get('items', [])
+                    if tracks:
+                        names = [f"{t['name']} — {t['artists'][0]['name']}" for t in tracks[:3]]
+                        # Auto-play the first result
+                        sp.start_playback(uris=[tracks[0]['uri']])
+                        msg = f"Encontré: {', '.join(names)}. Reproduciendo el primero."
+                    else:
+                        msg = f"Sin resultados para '{query}'."
+                else:
+                    msg = "Necesito qué buscar en Spotify."
+
+            elif action in ("devices", "dispositivos"):
+                devices_list = sp.devices()
+                devs = devices_list.get('devices', [])
+                if devs:
+                    names = [f"{d['name']} ({'activo' if d['is_active'] else 'inactivo'})"
+                             for d in devs]
+                    msg = "Dispositivos Spotify: " + ", ".join(names) + "."
+                else:
+                    msg = "No hay dispositivos Spotify activos. Abre la app primero."
+
             elif action == "volume":
-                value = parameters.get("value", "")
-                # We don't implement explicit volume API call here for simplicity, fallback to pyautogui
-                raise ValueError("Use pyautogui for volume")
-                
+                # Spotify API doesn't allow volume set without Premium + active device
+                # Fall through to pyautogui fallback
+                msg = ""  # will be handled below
+
             if msg:
                 if player:
                     player.write_log(f"🎵 Spotify: {msg}")
@@ -103,6 +128,18 @@ def spotify_control(parameters: dict, player=None) -> str:
             pyautogui.press("prevtrack")
             msg = "Returned to previous track."
             
+        elif action in ("search", "buscar"):
+            if query:
+                import urllib.parse
+                safe_query = urllib.parse.quote(query)
+                os.startfile(f"spotify:search:{safe_query}")
+                msg = f"Buscando '{query}' en Spotify."
+            else:
+                msg = "Necesito qué buscar en Spotify."
+
+        elif action in ("devices", "dispositivos"):
+            msg = "No hay conexión API activa. Abre Spotify manualmente para ver dispositivos."
+
         elif action == "volume":
             value = str(parameters.get("value", "")).lower()
             if "up" in value:

@@ -509,11 +509,15 @@ class SpotifyWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("SpotifyWidget")
+        self._is_playing = False
+        self._shuffle_on  = False
         self.update_style()
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
-        
+        layout.setSpacing(4)
+
+        # ── Header ──────────────────────────────────────────────────────────────
         header = QHBoxLayout()
         self.lbl_logo = QLabel()
         if HAS_QTA:
@@ -521,51 +525,188 @@ class SpotifyWidget(QWidget):
         else:
             self.lbl_logo.setText("🎵")
         header.addWidget(self.lbl_logo)
-        
         self.lbl_title = QLabel("SPOTIFY CONTROL")
         header.addWidget(self.lbl_title)
         header.addStretch()
         layout.addLayout(header)
-        
+
+        # ── Track info ──────────────────────────────────────────────────────────
         self.lbl_track = QLabel("Not Playing")
-        self.lbl_track.setStyleSheet("font-size: 13px; font-weight: bold; border: none; background: transparent; color: white;")
+        self.lbl_track.setStyleSheet(
+            "font-size: 13px; font-weight: bold; border: none; background: transparent; color: white;")
+        self.lbl_track.setWordWrap(True)
         self.lbl_artist = QLabel("Awaiting tracks...")
         layout.addWidget(self.lbl_track)
         layout.addWidget(self.lbl_artist)
-        
+
+        # ── Controls ────────────────────────────────────────────────────────────
         controls = QHBoxLayout()
         self.btn_shuffle = QPushButton()
-        self.btn_prev = QPushButton()
-        self.btn_play = QPushButton()
-        self.btn_next = QPushButton()
-        self.btn_heart = QPushButton()
-        
+        self.btn_prev    = QPushButton()
+        self.btn_play    = QPushButton()
+        self.btn_next    = QPushButton()
+        self.btn_heart   = QPushButton()
+
         self.buttons_list = [
-            (self.btn_shuffle, 'fa5s.random', C_PRI_DIM),
-            (self.btn_prev, 'fa5s.step-backward', '#ffffff'),
-            (self.btn_play, 'fa5s.play', '#ffffff'),
-            (self.btn_next, 'fa5s.step-forward', '#ffffff'),
-            (self.btn_heart, 'fa5s.heart', RED)
+            (self.btn_shuffle, 'fa5s.random',        C_PRI_DIM),
+            (self.btn_prev,    'fa5s.step-backward', '#ffffff'),
+            (self.btn_play,    'fa5s.play',          '#ffffff'),
+            (self.btn_next,    'fa5s.step-forward',  '#ffffff'),
+            (self.btn_heart,   'fa5s.heart',         RED),
         ]
-        
         for btn, icon, clr in self.buttons_list:
             if HAS_QTA:
                 btn.setIcon(qta.icon(icon, color=clr))
-            btn.setFixedSize(30, 30)
+            btn.setFixedSize(32, 32)
             controls.addWidget(btn)
-            
         layout.addLayout(controls)
-        
-        self.btn_play.clicked.connect(lambda: self._press("playpause"))
+
+        # ── Button connections ──────────────────────────────────────────────────
+        self.btn_play.clicked.connect(self._toggle_play)
         self.btn_prev.clicked.connect(lambda: self._press("prevtrack"))
         self.btn_next.clicked.connect(lambda: self._press("nexttrack"))
-        
+        self.btn_shuffle.clicked.connect(self._toggle_shuffle)
+        self.btn_heart.clicked.connect(self._like_track)
+
+        # ── Polling timer (reads Spotify window title every 3 s) ────────────────
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_spotify)
+        self._poll_timer.start(3000)
+        self._poll_spotify()   # immediate first read
+
+    # ── Internal helpers ─────────────────────────────────────────────────────────
     def _press(self, key):
         try:
             import pyautogui
             pyautogui.press(key)
         except Exception:
             pass
+
+    def _toggle_play(self):
+        self._press("playpause")
+        self._is_playing = not self._is_playing
+        self._refresh_play_icon()
+
+    def _refresh_play_icon(self):
+        if not HAS_QTA:
+            return
+        icon_name = 'fa5s.pause' if self._is_playing else 'fa5s.play'
+        self.btn_play.setIcon(qta.icon(icon_name, color='#ffffff'))
+
+    def _toggle_shuffle(self):
+        """Send Ctrl+S to Spotify window to toggle shuffle."""
+        self._shuffle_on = not self._shuffle_on
+        try:
+            import pygetwindow as gw, pyautogui
+            wins = [w for w in gw.getAllWindows()
+                    if 'spotify' in w.title.lower() or 'spotify' in (w.getAppName() or '').lower()]
+            if wins:
+                wins[0].activate()
+                import time; time.sleep(0.15)
+                pyautogui.hotkey('ctrl', 's')
+        except Exception:
+            pass
+        clr = C_PRI if self._shuffle_on else C_PRI_DIM
+        if HAS_QTA:
+            self.btn_shuffle.setIcon(qta.icon('fa5s.random', color=clr))
+
+    def _like_track(self):
+        """Ctrl+S via Spotify API — fallback: visual pulse."""
+        try:
+            from memory.config_manager import load_api_keys
+            import spotipy
+            cfg  = load_api_keys()
+            info = cfg.get("spotify_token_info", {})
+            if info.get("access_token"):
+                sp = spotipy.Spotify(auth=info["access_token"])
+                cur = sp.current_playback()
+                if cur and cur.get("item"):
+                    track_id = cur["item"]["id"]
+                    sp.current_user_saved_tracks_add([track_id])
+                    self.btn_heart.setStyleSheet(
+                        f"QPushButton {{ background: {RED}; border: 1px solid {C_BORDER}; "
+                        f"border-radius: 16px; }}")
+                    return
+        except Exception:
+            pass
+        # Pulse the heart as visual-only feedback
+        self.btn_heart.setStyleSheet(
+            f"QPushButton {{ background: {RED}; border: 1px solid {C_BORDER}; border-radius: 16px; }}")
+        QTimer.singleShot(800, self._reset_heart_style)
+
+    def _reset_heart_style(self):
+        self.btn_heart.setStyleSheet(
+            f"QPushButton {{ background: rgba(245,158,11,0.08); border: 1px solid {C_BORDER}; "
+            f"border-radius: 16px; }} QPushButton:hover {{ background: rgba(245,158,11,0.2); }}")
+
+    def _poll_spotify(self):
+        """
+        Priority order:
+        1. Spotify API (spotipy) if token available
+        2. Windows process window title (no API needed)
+        """
+        track, artist, playing = self._fetch_via_api()
+        if not track:
+            track, artist, playing = self._fetch_via_window_title()
+
+        if track:
+            short_track = track[:30] + "…" if len(track) > 30 else track
+            self.lbl_track.setText(short_track)
+            short_artist = artist[:28] + "…" if len(artist) > 28 else artist
+            self.lbl_artist.setText(short_artist)
+            if self._is_playing != playing:
+                self._is_playing = playing
+                self._refresh_play_icon()
+        else:
+            self.lbl_track.setText("Not Playing")
+            self.lbl_artist.setText("Open Spotify to start")
+            if self._is_playing:
+                self._is_playing = False
+                self._refresh_play_icon()
+
+    def _fetch_via_api(self):
+        """Returns (track_name, artist_name, is_playing) or ('', '', False)."""
+        try:
+            from memory.config_manager import load_api_keys
+            import spotipy
+            cfg  = load_api_keys()
+            info = cfg.get("spotify_token_info", {})
+            if not info.get("access_token"):
+                return "", "", False
+            sp  = spotipy.Spotify(auth=info["access_token"])
+            cur = sp.current_playback()
+            if cur and cur.get("item"):
+                t       = cur["item"]["name"]
+                a       = cur["item"]["artists"][0]["name"]
+                playing = cur.get("is_playing", False)
+                return t, a, playing
+        except Exception:
+            pass
+        return "", "", False
+
+    def _fetch_via_window_title(self):
+        """Reads Spotify window title: 'Song - Artist' format."""
+        try:
+            import subprocess, re
+            # PowerShell: get window title of Spotify.exe
+            ps = (
+                "Get-Process Spotify -ErrorAction SilentlyContinue "
+                "| Where-Object {$_.MainWindowTitle -ne ''} "
+                "| Select-Object -First 1 -ExpandProperty MainWindowTitle"
+            )
+            out = subprocess.check_output(
+                ["powershell", "-NoProfile", "-Command", ps],
+                text=True, timeout=2, creationflags=subprocess.CREATE_NO_WINDOW
+            ).strip()
+            if out and out.lower() not in ("spotify", "spotify premium", ""):
+                # Format: "Track - Artist"
+                parts = out.split(" - ", 1)
+                if len(parts) == 2:
+                    return parts[0].strip(), parts[1].strip(), True
+                return out, "", True
+        except Exception:
+            pass
+        return "", "", False
 
     def update_style(self):
         self.setStyleSheet(f"""
@@ -576,10 +717,16 @@ class SpotifyWidget(QWidget):
             }}
         """)
         if hasattr(self, "lbl_title"):
-            self.lbl_title.setStyleSheet(f"font-weight: bold; font-size: 11px; letter-spacing: 2px; color: {C_PRI}; border: none; background: transparent;")
-            self.lbl_artist.setStyleSheet(f"font-size: 11px; color: {C_PRI_DIM}; border: none; background: transparent;")
+            self.lbl_title.setStyleSheet(
+                f"font-weight: bold; font-size: 11px; letter-spacing: 2px; "
+                f"color: {C_PRI}; border: none; background: transparent;")
+            self.lbl_artist.setStyleSheet(
+                f"font-size: 11px; color: {C_PRI_DIM}; border: none; background: transparent;")
             for btn, icon, clr in self.buttons_list:
-                btn.setStyleSheet(f"QPushButton {{ background: rgba(245,158,11,0.08); border: 1px solid {C_BORDER}; border-radius: 15px; }} QPushButton:hover {{ background: rgba(245,158,11,0.2); }}")
+                btn.setStyleSheet(
+                    f"QPushButton {{ background: rgba(245,158,11,0.08); border: 1px solid {C_BORDER}; "
+                    f"border-radius: 16px; }} "
+                    f"QPushButton:hover {{ background: rgba(245,158,11,0.2); }}")
 
 
 class SystemWidget(QWidget):
@@ -652,40 +799,94 @@ class SystemWidget(QWidget):
 
 
 class TodoWidget(QWidget):
+    _SAVE_PATH = os.path.join(os.path.dirname(__file__), "config", "todos.json")
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("TodoWidget")
         self.update_style()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
-        
+        layout.setSpacing(5)
+
+        # ── Header ──────────────────────────────────────────────────────────────
         header = QHBoxLayout()
         lbl_icon = QLabel()
         if HAS_QTA:
             lbl_icon.setPixmap(qta.icon('fa5s.check-circle', color=C_PRI).pixmap(18, 18))
         header.addWidget(lbl_icon)
-        
         self.lbl_title = QLabel("TODOS")
         header.addWidget(self.lbl_title)
         header.addStretch()
         layout.addLayout(header)
-        
+
+        # ── Input row ───────────────────────────────────────────────────────────
         inp_layout = QHBoxLayout()
         self.txt_task = QLineEdit()
         self.txt_task.setPlaceholderText("New chore...")
         inp_layout.addWidget(self.txt_task)
-        
         self.btn_add = QPushButton("+")
+        self.btn_add.setFixedWidth(30)
         inp_layout.addWidget(self.btn_add)
         layout.addLayout(inp_layout)
-        
+
+        # ── List ────────────────────────────────────────────────────────────────
         self.lst_todo = QListWidget()
-        self.lst_todo.setStyleSheet("QListWidget { border: none; background: transparent; } QListWidget::item { padding: 4px; color: white; }")
+        self.lst_todo.setStyleSheet(
+            "QListWidget { border: none; background: transparent; }"
+            "QListWidget::item { padding: 4px; color: white; border-radius: 4px; }"
+            "QListWidget::item:hover { background: rgba(245,158,11,0.10); }"
+        )
+        self.lst_todo.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.lst_todo.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.lst_todo)
-        
+
+        # ── Hint ────────────────────────────────────────────────────────────────
+        hint = QLabel("✓ check to complete  •  right-click to delete")
+        hint.setStyleSheet(f"font-size: 9px; color: {C_PRI_DIM}; border: none; background: transparent;")
+        layout.addWidget(hint)
+
+        # ── Connections ─────────────────────────────────────────────────────────
         self.btn_add.clicked.connect(self.add_task)
         self.txt_task.returnPressed.connect(self.add_task)
-        
+        self.lst_todo.itemChanged.connect(self._on_item_changed)
+
+        self._load()
+
+    # ── Persistence ─────────────────────────────────────────────────────────────
+    def _load(self):
+        try:
+            with open(self._SAVE_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            self.lst_todo.blockSignals(True)
+            for entry in data:
+                item = QListWidgetItem(entry["text"])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                state = Qt.CheckState.Checked if entry.get("done") else Qt.CheckState.Unchecked
+                item.setCheckState(state)
+                if entry.get("done"):
+                    item.setForeground(QColor(C_PRI_DIM))
+                self.lst_todo.addItem(item)
+            self.lst_todo.blockSignals(False)
+        except Exception:
+            pass   # first run or corrupt file — start empty
+
+    def _save(self):
+        try:
+            os.makedirs(os.path.dirname(self._SAVE_PATH), exist_ok=True)
+            data = []
+            for i in range(self.lst_todo.count()):
+                it = self.lst_todo.item(i)
+                data.append({
+                    "text": it.text(),
+                    "done": it.checkState() == Qt.CheckState.Checked,
+                })
+            with open(self._SAVE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[Todo] save error: {e}")
+
+    # ── Slots ────────────────────────────────────────────────────────────────────
     def add_task(self):
         text = self.txt_task.text().strip()
         if text:
@@ -694,6 +895,38 @@ class TodoWidget(QWidget):
             item.setCheckState(Qt.CheckState.Unchecked)
             self.lst_todo.addItem(item)
             self.txt_task.clear()
+            self._save()
+
+    def _on_item_changed(self, item):
+        """Grey-out completed items and persist."""
+        if item.checkState() == Qt.CheckState.Checked:
+            item.setForeground(QColor(C_PRI_DIM))
+        else:
+            item.setForeground(QColor("white"))
+        self._save()
+
+    def _show_context_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        item = self.lst_todo.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {C_BG}; color: white; border: 1px solid {C_BORDER}; border-radius: 6px; }}"
+            f"QMenu::item:selected {{ background: rgba(245,158,11,0.25); }}"
+        )
+        act_del    = menu.addAction("🗑 Eliminar tarea")
+        act_toggle = menu.addAction("✅ Marcar como hecha" if item.checkState() == Qt.CheckState.Unchecked
+                                    else "↩ Marcar como pendiente")
+        action = menu.exec(self.lst_todo.mapToGlobal(pos))
+        if action == act_del:
+            self.lst_todo.takeItem(self.lst_todo.row(item))
+            self._save()
+        elif action == act_toggle:
+            new_state = (Qt.CheckState.Checked
+                         if item.checkState() == Qt.CheckState.Unchecked
+                         else Qt.CheckState.Unchecked)
+            item.setCheckState(new_state)
 
     def update_style(self):
         self.setStyleSheet(f"""
@@ -704,33 +937,84 @@ class TodoWidget(QWidget):
             }}
         """)
         if hasattr(self, "lbl_title"):
-            self.lbl_title.setStyleSheet(f"font-weight: bold; font-size: 11px; letter-spacing: 2px; color: {C_PRI}; border: none; background: transparent;")
-            self.txt_task.setStyleSheet(f"QLineEdit {{ background: rgba(0,0,0,0.3); border: 1px solid {C_BORDER}; border-radius: 6px; padding: 4px; color: white; }}")
-            self.btn_add.setStyleSheet(f"QPushButton {{ background: {C_PRI}; color: black; font-weight: bold; border-radius: 6px; padding: 4px 10px; }}")
+            self.lbl_title.setStyleSheet(
+                f"font-weight: bold; font-size: 11px; letter-spacing: 2px; "
+                f"color: {C_PRI}; border: none; background: transparent;")
+            self.txt_task.setStyleSheet(
+                f"QLineEdit {{ background: rgba(0,0,0,0.3); border: 1px solid {C_BORDER}; "
+                f"border-radius: 6px; padding: 4px; color: white; }}")
+            self.btn_add.setStyleSheet(
+                f"QPushButton {{ background: {C_PRI}; color: black; font-weight: bold; "
+                f"border-radius: 6px; padding: 4px 6px; }}")
 
 
 class NotesWidget(QWidget):
+    _SAVE_PATH = os.path.join(os.path.dirname(__file__), "config", "pad_notes.txt")
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("NotesWidget")
         self.update_style()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
-        
+        layout.setSpacing(5)
+
+        # ── Header ──────────────────────────────────────────────────────────────
         header = QHBoxLayout()
         lbl_icon = QLabel()
         if HAS_QTA:
             lbl_icon.setPixmap(qta.icon('fa5s.sticky-note', color=C_PRI).pixmap(18, 18))
         header.addWidget(lbl_icon)
-        
         self.lbl_title = QLabel("PAD NOTES")
         header.addWidget(self.lbl_title)
         header.addStretch()
+
+        # Save indicator ("● guardado")
+        self.lbl_saved = QLabel("● guardado")
+        self.lbl_saved.setStyleSheet(f"font-size: 9px; color: {C_PRI_DIM}; border: none; background: transparent;")
+        header.addWidget(self.lbl_saved)
         layout.addLayout(header)
-        
+
+        # ── Text area ───────────────────────────────────────────────────────────
         self.txt_notes = QTextEdit()
-        self.txt_notes.setPlaceholderText("Write details...")
+        self.txt_notes.setPlaceholderText("Escribe tus notas aquí... Se guardan automáticamente.")
         layout.addWidget(self.txt_notes)
+
+        # ── Autosave debounce timer (saves 1.5s after last keystroke) ───────────
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._do_save)
+        self.txt_notes.textChanged.connect(self._on_text_changed)
+
+        self._load()
+
+    # ── Persistence ─────────────────────────────────────────────────────────────
+    def _load(self):
+        try:
+            with open(self._SAVE_PATH, encoding="utf-8") as f:
+                content = f.read()
+            self.txt_notes.blockSignals(True)
+            self.txt_notes.setPlainText(content)
+            self.txt_notes.blockSignals(False)
+        except Exception:
+            pass   # first run
+
+    def _on_text_changed(self):
+        self.lbl_saved.setText("● editando…")
+        self.lbl_saved.setStyleSheet("font-size: 9px; color: #f59e0b; border: none; background: transparent;")
+        self._save_timer.start(1500)   # restart debounce
+
+    def _do_save(self):
+        try:
+            os.makedirs(os.path.dirname(self._SAVE_PATH), exist_ok=True)
+            with open(self._SAVE_PATH, "w", encoding="utf-8") as f:
+                f.write(self.txt_notes.toPlainText())
+            self.lbl_saved.setText("● guardado")
+            self.lbl_saved.setStyleSheet(
+                f"font-size: 9px; color: {C_PRI_DIM}; border: none; background: transparent;")
+        except Exception as e:
+            self.lbl_saved.setText("● error")
+            print(f"[Notes] save error: {e}")
 
     def update_style(self):
         self.setStyleSheet(f"""
@@ -741,8 +1025,12 @@ class NotesWidget(QWidget):
             }}
         """)
         if hasattr(self, "lbl_title"):
-            self.lbl_title.setStyleSheet(f"font-weight: bold; font-size: 11px; letter-spacing: 2px; color: {C_PRI}; border: none; background: transparent;")
-            self.txt_notes.setStyleSheet(f"QTextEdit {{ border: none; background: rgba(0,0,0,0.2); border-radius: 6px; padding: 6px; color: white; }}")
+            self.lbl_title.setStyleSheet(
+                f"font-weight: bold; font-size: 11px; letter-spacing: 2px; "
+                f"color: {C_PRI}; border: none; background: transparent;")
+            self.txt_notes.setStyleSheet(
+                f"QTextEdit {{ border: none; background: rgba(0,0,0,0.2); "
+                f"border-radius: 6px; padding: 6px; color: white; }}")
 
 
 class FileDropZone(QWidget):
@@ -751,20 +1039,34 @@ class FileDropZone(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.update_style()
+        self.setMinimumHeight(70)
+        self.update_style(False)
         layout = QVBoxLayout(self)
-        self.lbl = QLabel("Drop File Trigger")
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        icon_lbl = QLabel()
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        if HAS_QTA:
+            icon_lbl.setPixmap(qta.icon('fa5s.file-upload', color=C_PRI_DIM).pixmap(24, 24))
+        else:
+            icon_lbl.setText("📂")
+        layout.addWidget(icon_lbl)
+
+        self.lbl = QLabel("Arrastra un archivo aquí")
         self.lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl.setStyleSheet("border: none; background: transparent; font-weight: bold; color: white;")
+        self.lbl.setStyleSheet(
+            f"border: none; background: transparent; font-size: 10px; color: {C_PRI_DIM};")
         layout.addWidget(self.lbl)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self.setStyleSheet(f"QWidget {{ background: rgba(245,158,11,0.15); border: 2px dashed {C_PRI}; border-radius: 10px; }}")
+            self.update_style(True)
+            self.lbl.setText("¡Suelta el archivo!")
 
     def dragLeaveEvent(self, event):
-        self.update_style()
+        self.update_style(False)
+        self.lbl.setText("Arrastra un archivo aquí")
 
     def dropEvent(self, event):
         for url in event.mimeData().urls():
@@ -772,16 +1074,18 @@ class FileDropZone(QWidget):
             if os.path.exists(path):
                 self.fileDropped.emit(path)
                 break
-        self.dragLeaveEvent(None)
+        self.update_style(False)
+        self.lbl.setText("Arrastra un archivo aquí")
 
-    def update_style(self):
-        self.setStyleSheet(f"""
-            QWidget {{
-                background: rgba(0,0,0,0.25);
-                border: 1.5px dashed {C_BORDER};
-                border-radius: 10px;
-            }}
-        """)
+    def update_style(self, active: bool = False):
+        if active:
+            self.setStyleSheet(
+                f"QWidget {{ background: rgba(245,158,11,0.15); "
+                f"border: 2px dashed {C_PRI}; border-radius: 10px; }}")
+        else:
+            self.setStyleSheet(
+                f"QWidget {{ background: rgba(0,0,0,0.20); "
+                f"border: 1.5px dashed {C_BORDER}; border-radius: 10px; }}")
 
 
 class FilesPanel(QWidget):
@@ -789,33 +1093,152 @@ class FilesPanel(QWidget):
         super().__init__(parent)
         self.ui = ui
         self.setObjectName("FilesPanel")
+        self._last_path = ""
         self.update_style()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 10, 15, 10)
-        
+        layout.setSpacing(5)
+
+        # ── Header ──────────────────────────────────────────────────────────────
         header = QHBoxLayout()
         lbl_icon = QLabel()
         if HAS_QTA:
             lbl_icon.setPixmap(qta.icon('fa5s.folder-open', color=C_PRI).pixmap(18, 18))
         header.addWidget(lbl_icon)
-        
         self.lbl_title = QLabel("FILES DROP")
         header.addWidget(self.lbl_title)
         header.addStretch()
         layout.addLayout(header)
-        
+
+        # ── Drop zone ───────────────────────────────────────────────────────────
         self.drop_zone = FileDropZone()
         self.drop_zone.fileDropped.connect(self.on_file_dropped)
         layout.addWidget(self.drop_zone)
-        
+
+        # ── Active file label ────────────────────────────────────────────────────
         self.lbl_current = QLabel("Ready for drops.")
         layout.addWidget(self.lbl_current)
-        
+
+        # ── Reading status ───────────────────────────────────────────────────────
+        self.lbl_read_status = QLabel("")
+        self.lbl_read_status.setWordWrap(True)
+        layout.addWidget(self.lbl_read_status)
+
+        # ── Button row 1: file actions ───────────────────────────────────────────
+        btn_row1 = QHBoxLayout()
+        self.btn_open   = QPushButton("Abrir")
+        self.btn_send   = QPushButton("→ WA")
+        self.btn_reveal = QPushButton("📁")
+        for b in (self.btn_open, self.btn_send, self.btn_reveal):
+            b.setEnabled(False)
+            btn_row1.addWidget(b)
+        layout.addLayout(btn_row1)
+
+        # ── Button row 2: JARVIS analyze ─────────────────────────────────────────
+        self.btn_analyze = QPushButton("📖  Analizar con JARVIS")
+        self.btn_analyze.setEnabled(False)
+        layout.addWidget(self.btn_analyze)
+
+        # ── Connections ──────────────────────────────────────────────────────────
+        self.btn_open.clicked.connect(self._open_file)
+        self.btn_send.clicked.connect(self._send_wa)
+        self.btn_reveal.clicked.connect(self._reveal_file)
+        self.btn_analyze.clicked.connect(self._analyze_with_jarvis)
+
+    # ── Slots ────────────────────────────────────────────────────────────────────
     def on_file_dropped(self, path):
-        self.ui.current_file = path
+        self.ui.current_file  = path
+        self._last_path       = path
         name = os.path.basename(path)
-        self.lbl_current.setText(f"Active: {name}")
-        self.ui.write_log(f"📁 Drops linked: {name}")
+        ext  = os.path.splitext(name)[1].upper()
+        size = os.path.getsize(path)
+        size_str = f"{size/1024:.1f} KB" if size < 1_048_576 else f"{size/1_048_576:.1f} MB"
+        self.lbl_current.setText(f"📄 {name}  ({ext}, {size_str})")
+        self.lbl_read_status.setText("")
+        self.ui.write_log(f"📁 Archivo listo: {name}")
+        for b in (self.btn_open, self.btn_send, self.btn_reveal, self.btn_analyze):
+            b.setEnabled(True)
+        # Auto-read the file content so it's ready
+        self._read_file_background(path)
+
+    def _read_file_background(self, path: str):
+        """Read file content in a thread to keep UI responsive."""
+        import threading
+        def _worker():
+            try:
+                from core.file_reader import read_file, build_inject_message
+                content, file_type = read_file(path)
+                name = os.path.basename(path)
+                msg  = build_inject_message(name, content, file_type)
+                self.ui.current_file_content = msg
+                self.ui.current_file_path    = path
+                # Update status label on main thread
+                QTimer.singleShot(0, lambda: self.lbl_read_status.setText(
+                    f"✅ Leído: {file_type} · {len(content):,} chars"))
+            except Exception as e:
+                QTimer.singleShot(0, lambda: self.lbl_read_status.setText(
+                    f"⚠ Error leyendo: {e}"))
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _analyze_with_jarvis(self):
+        """Send the file content to JARVIS via the inject callback."""
+        if not self._last_path:
+            return
+        content = getattr(self.ui, "current_file_content", "")
+        name    = os.path.basename(self._last_path)
+
+        if not content:
+            # Try to read synchronously if background didn't finish
+            try:
+                from core.file_reader import read_file, build_inject_message
+                raw, ftype = read_file(self._last_path)
+                content = build_inject_message(name, raw, ftype)
+                self.ui.current_file_content = content
+            except Exception as e:
+                self.ui.write_log(f"⚠ No pude leer el archivo: {e}")
+                return
+
+        if content.startswith("__IMAGE_B64__"):
+            # Image: send via vision — tell JARVIS to analyze screen or use vision
+            self.ui.write_log("🖼 Imagen detectada. Di 'analiza esta imagen' para usar Gemini Vision.")
+            if self.ui.on_file_analyze:
+                self.ui.on_file_analyze(content, name, self._last_path)
+            return
+
+        if not content.strip():
+            self.ui.write_log("⚠ El archivo está vacío o no se pudo leer.")
+            return
+
+        self.ui.write_log(f"📤 Enviando '{name}' a JARVIS ({len(content):,} chars)...")
+        self.btn_analyze.setText("⏳ Analizando...")
+        self.btn_analyze.setEnabled(False)
+
+        if self.ui.on_file_analyze:
+            self.ui.on_file_analyze(content, name, self._last_path)
+        QTimer.singleShot(3000, lambda: (
+            self.btn_analyze.setText("📖  Analizar con JARVIS"),
+            self.btn_analyze.setEnabled(True),
+        ))
+
+    def _open_file(self):
+        if self._last_path:
+            try:
+                os.startfile(self._last_path)
+            except Exception as e:
+                self.ui.write_log(f"⚠ No se pudo abrir: {e}")
+
+    def _reveal_file(self):
+        if self._last_path:
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", self._last_path])
+
+    def _send_wa(self):
+        """Set current_file so JARVIS picks it up for WhatsApp."""
+        if self._last_path:
+            self.ui.current_file = self._last_path
+            self.ui.write_log(
+                f"📤 Archivo '{os.path.basename(self._last_path)}' listo para WhatsApp. "
+                f"Di: 'manda este archivo a [contacto] por WhatsApp'")
 
     def update_style(self):
         self.setStyleSheet(f"""
@@ -826,9 +1249,166 @@ class FilesPanel(QWidget):
             }}
         """)
         if hasattr(self, "lbl_title"):
-            self.lbl_title.setStyleSheet(f"font-weight: bold; font-size: 11px; letter-spacing: 2px; color: {C_PRI}; border: none; background: transparent;")
-            self.lbl_current.setStyleSheet(f"font-size: 10px; color: {C_PRI_DIM}; border: none; background: transparent;")
-            self.drop_zone.update_style()
+            self.lbl_title.setStyleSheet(
+                f"font-weight: bold; font-size: 11px; letter-spacing: 2px; "
+                f"color: {C_PRI}; border: none; background: transparent;")
+            self.lbl_current.setStyleSheet(
+                f"font-size: 10px; color: {C_PRI_DIM}; border: none; background: transparent;")
+            self.drop_zone.update_style(False)
+            self.lbl_read_status.setStyleSheet(
+                f"font-size: 9px; color: {C_PRI_DIM}; border: none; background: transparent;")
+            btn_style = (
+                f"QPushButton {{ background: rgba(245,158,11,0.08); color: white; "
+                f"border: 1px solid {C_BORDER}; border-radius: 5px; font-size: 10px; padding: 3px 6px; }}"
+                f"QPushButton:hover {{ background: rgba(245,158,11,0.22); }}"
+                f"QPushButton:disabled {{ color: {C_PRI_DIM}; border-color: rgba(120,53,15,0.25); }}"
+            )
+            for b in (self.btn_open, self.btn_send, self.btn_reveal):
+                b.setStyleSheet(btn_style)
+            self.btn_analyze.setStyleSheet(
+                f"QPushButton {{ background: rgba(245,158,11,0.18); color: {C_PRI}; "
+                f"border: 1.5px solid {C_PRI}; border-radius: 6px; font-size: 11px; "
+                f"font-weight: bold; padding: 5px 10px; }}"
+                f"QPushButton:hover {{ background: rgba(245,158,11,0.35); }}"
+                f"QPushButton:disabled {{ color: {C_PRI_DIM}; border-color: rgba(120,53,15,0.3); }}"
+            )
+
+
+class MemoryViewerDialog(QDialog):
+    """Shows JARVIS long-term memory — view, edit, delete entries."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("JARVIS — Memoria Persistente")
+        self.resize(620, 500)
+        self.setStyleSheet(f"""
+            QDialog {{ background: {C_BG}; border: 1.5px solid {C_BORDER}; border-radius: 12px; }}
+            QLabel  {{ color: white; background: transparent; border: none; }}
+            QTreeWidget {{ background: rgba(0,0,0,0.3); border: 1px solid {C_BORDER};
+                          border-radius: 8px; color: white; }}
+            QTreeWidget::item:hover    {{ background: rgba(245,158,11,0.12); }}
+            QTreeWidget::item:selected {{ background: rgba(245,158,11,0.25); }}
+            QHeaderView::section {{ background: rgba(245,158,11,0.15); color: {C_PRI};
+                                    border: none; padding: 4px; font-weight: bold; }}
+        """)
+        from PyQt6.QtWidgets import QTreeWidget, QTreeWidgetItem
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(10)
+
+        # Header
+        hdr = QHBoxLayout()
+        title = QLabel("🧠  Memoria Persistente de JARVIS")
+        title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {C_PRI};")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        self.lbl_stats = QLabel("")
+        self.lbl_stats.setStyleSheet(f"font-size: 10px; color: {C_PRI_DIM};")
+        hdr.addWidget(self.lbl_stats)
+        lay.addLayout(hdr)
+
+        # Tree
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["Categoría / Clave", "Valor", "Fuente"])
+        self.tree.setColumnWidth(0, 200)
+        self.tree.setColumnWidth(1, 280)
+        self.tree.setColumnWidth(2, 80)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._ctx_menu)
+        lay.addWidget(self.tree)
+
+        # Bottom buttons
+        btn_row = QHBoxLayout()
+        self.btn_refresh = QPushButton("🔄 Actualizar")
+        self.btn_clear   = QPushButton("🗑 Borrar todo")
+        self.btn_close   = QPushButton("Cerrar")
+        for b in (self.btn_refresh, self.btn_clear, self.btn_close):
+            btn_row.addWidget(b)
+            b.setStyleSheet(
+                f"QPushButton {{ background: rgba(245,158,11,0.10); color: white; "
+                f"border: 1px solid {C_BORDER}; border-radius: 6px; padding: 6px 14px; }}"
+                f"QPushButton:hover {{ background: rgba(245,158,11,0.25); }}"
+            )
+        lay.addLayout(btn_row)
+
+        self.btn_refresh.clicked.connect(self._load)
+        self.btn_clear.clicked.connect(self._clear_all)
+        self.btn_close.clicked.connect(self.accept)
+        self._load()
+
+    def _load(self):
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        self.tree.clear()
+        try:
+            from memory.memory_engine import load_long_term, get_stats
+            mem   = load_long_term()
+            stats = get_stats()
+            self.lbl_stats.setText(
+                f"{stats['long_term_entries']} hechos  •  "
+                f"{stats['session_days']} días de sesiones  •  "
+                f"{stats['total_turns_logged']} turnos"
+            )
+            CAT_ICONS = {
+                "preferences": "⭐",
+                "facts":       "📌",
+                "notes":       "📝",
+                "context":     "🔍",
+                "habits":      "🔁",
+            }
+            for cat, items in mem.items():
+                if not isinstance(items, dict) or not items:
+                    continue
+                cat_item = QTreeWidgetItem(self.tree, [f"{CAT_ICONS.get(cat,'▸')} {cat.upper()}", "", ""])
+                cat_item.setExpanded(True)
+                cat_item.setData(0, Qt.ItemDataRole.UserRole, ("cat", cat))
+                for key, val_data in items.items():
+                    if isinstance(val_data, dict):
+                        val = val_data.get("value", "")
+                        src = val_data.get("source", "")
+                    else:
+                        val = str(val_data)
+                        src = ""
+                    child = QTreeWidgetItem(cat_item, [f"   {key}", str(val)[:120], src])
+                    child.setData(0, Qt.ItemDataRole.UserRole, ("entry", cat, key))
+        except Exception as e:
+            QTreeWidgetItem(self.tree, [f"Error: {e}", "", ""])
+
+    def _ctx_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data or data[0] != "entry":
+            return
+        _, cat, key = data
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            f"QMenu {{ background: {C_BG}; color: white; border: 1px solid {C_BORDER}; }}"
+            f"QMenu::item:selected {{ background: rgba(245,158,11,0.25); }}"
+        )
+        act = menu.addAction(f"🗑  Eliminar '{key}'")
+        if menu.exec(self.tree.mapToGlobal(pos)) == act:
+            try:
+                from memory.memory_engine import forget
+                forget(cat, key)
+                self._load()
+            except Exception as e:
+                print(f"[MemoryViewer] delete error: {e}")
+
+    def _clear_all(self):
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.question(
+            self, "Confirmar",
+            "¿Borrar TODA la memoria a largo plazo?\nLos diarios de sesión se conservan.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                from memory.memory_engine import _LT, _empty_lt, _save_json
+                _save_json(_LT, _empty_lt())
+                self._load()
+            except Exception as e:
+                print(f"[MemoryViewer] clear error: {e}")
 
 
 class DeviceSettingsDialog(QDialog):
@@ -1595,23 +2175,37 @@ class MainWindow(QMainWindow):
         self.lbl_brand.setFont(font)
         header_bar.addWidget(self.lbl_brand)
         header_bar.addStretch()
-        
+
+        # ── Active tool indicator ──────────────────────────────────────────────
+        self.lbl_active_tool = QLabel("")
+        self.lbl_active_tool.setStyleSheet(
+            "font-size: 9px; color: #00d4ff; background: rgba(0,212,255,0.08); "
+            "border: 1px solid rgba(0,212,255,0.25); border-radius: 4px; "
+            "padding: 2px 6px; font-family: 'Consolas', monospace;"
+        )
+        self.lbl_active_tool.setVisible(False)
+        header_bar.addWidget(self.lbl_active_tool)
+        header_bar.addSpacing(8)
+        # ─────────────────────────────────────────────────────────────────────
+
         self.btn_protocols = QPushButton()
-        self.btn_settings = QPushButton()
-        self.btn_camera = QPushButton()
-        self.btn_play = QPushButton()
-        self.btn_folder = QPushButton()
-        self.btn_min = QPushButton()
-        self.btn_close = QPushButton()
-        
+        self.btn_settings  = QPushButton()
+        self.btn_memory    = QPushButton()
+        self.btn_camera    = QPushButton()
+        self.btn_play      = QPushButton()
+        self.btn_folder    = QPushButton()
+        self.btn_min       = QPushButton()
+        self.btn_close     = QPushButton()
+
         self.head_buttons = [
             (self.btn_protocols, 'fa5s.project-diagram', self._open_protocols),
-            (self.btn_settings, 'fa5s.cog', self._open_settings),
-            (self.btn_camera, 'fa5s.video', self._toggle_camera_gestures),
-            (self.btn_play, 'fa5s.play', self._toggle_mute),
-            (self.btn_folder, 'fa5s.folder', self._open_folder),
-            (self.btn_min, 'fa5s.window-minimize', self.showMinimized),
-            (self.btn_close, 'fa5s.times', self.close)
+            (self.btn_settings,  'fa5s.cog',             self._open_settings),
+            (self.btn_memory,    'fa5s.brain',            self._open_memory),
+            (self.btn_camera,    'fa5s.video',            self._toggle_camera_gestures),
+            (self.btn_play,      'fa5s.play',             self._toggle_mute),
+            (self.btn_folder,    'fa5s.folder',           self._open_folder),
+            (self.btn_min,       'fa5s.window-minimize',  self.showMinimized),
+            (self.btn_close,     'fa5s.times',            self.close),
         ]
         
         for btn, icon, cb in self.head_buttons:
@@ -1740,7 +2334,11 @@ class MainWindow(QMainWindow):
             if self.ui.on_config_saved:
                 from memory.config_manager import load_api_keys
                 self.ui.on_config_saved(load_api_keys())
-                
+
+    def _open_memory(self):
+        dialog = MemoryViewerDialog(self)
+        dialog.exec()
+
     def _open_protocols(self):
         dialog = ProtocolDialog(self)
         dialog.exec()
@@ -1937,9 +2535,12 @@ class JarvisUI:
         self.muted = False
         self.current_file = ""
         
-        self.on_text_command = None
-        self.on_stop_command = None
-        self.on_config_saved = None
+        self.on_text_command  = None
+        self.on_stop_command  = None
+        self.on_config_saved  = None
+        self.on_file_analyze  = None   # (content: str, filename: str, path: str) → None
+        self.current_file_content = "" # last read file content
+        self.current_file_path    = "" # path of currently loaded file (for file_processor)
         
         self.jarvis_response_buffer = ""
         
@@ -1954,6 +2555,29 @@ class JarvisUI:
 
     def write_log(self, text: str):
         pass
+
+    def set_active_tool(self, tool_name: str):
+        """Show/hide the active tool indicator in the header.
+        Pass empty string to hide it."""
+        try:
+            from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+            lbl = self._win.lbl_active_tool
+            if tool_name:
+                QMetaObject.invokeMethod(
+                    lbl, "setText", Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(str, f"⚙ {tool_name}")
+                )
+                QMetaObject.invokeMethod(
+                    lbl, "setVisible", Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(bool, True)
+                )
+            else:
+                QMetaObject.invokeMethod(
+                    lbl, "setVisible", Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(bool, False)
+                )
+        except Exception as _e:
+            pass  # UI not ready yet — non-critical
         
     def set_state(self, state: str):
         self._win.orb.set_state(state)

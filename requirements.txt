@@ -1,36 +1,67 @@
-sounddevice
+# ── Core API & Audio ──────────────────────────────────────────────────────────
 google-genai
+sounddevice
+numpy
+
+# ── UI (PyQt6 holographic interface) ──────────────────────────────────────────
+pyqt6
+pyqt6-webengine
+qtawesome
+
+# ── Document generation (NEW: deep_research, document_creator) ────────────────
+python-docx
+python-pptx
 pillow
+mss
+
+# ── Web & search ──────────────────────────────────────────────────────────────
 requests
 beautifulsoup4
 duckduckgo-search
+youtube-transcript-api
+
+# ── Browser automation ────────────────────────────────────────────────────────
 playwright
 pyautogui
 pyperclip
 pygetwindow
+pywinauto
+
+# ── Computer vision & gesture ─────────────────────────────────────────────────
 opencv-python
-numpy
-mss
+mediapipe
+
+# ── System monitoring & control ───────────────────────────────────────────────
 psutil
 comtypes
 pycaw
 win10toast
 send2trash
-youtube-transcript-api
-pywinauto
-python-pptx
-pyqt6
-pyqt6-webengine
+
+# ── Global hotkey (NEW: core/global_hotkey.py — Ctrl+Alt+J) ───────────────────
+keyboard
+
+# ── Google services ───────────────────────────────────────────────────────────
 google-auth-oauthlib
 google-api-python-client
+
+# ── Spotify ───────────────────────────────────────────────────────────────────
 spotipy
+
+# ── Peripherals (RGB, etc) ────────────────────────────────────────────────────
 openrgb-python
+
+# ── Local web/notification server ─────────────────────────────────────────────
 flask
 flask-socketio
+eventlet
+
+# ── TTS fallback ──────────────────────────────────────────────────────────────
 gtts
 edge-tts
-cryptography
-eventlet
+
+# ── Voice activity detection (offline wake word) ──────────────────────────────
 vosk
-qtawesome
-mediapipe
+
+# ── Security ──────────────────────────────────────────────────────────────────
+cryptography

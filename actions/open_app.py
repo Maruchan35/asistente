@@ -149,14 +149,23 @@ def open_app(parameters: dict, response=None, player=None) -> str:
         if not executable:
             executable = app_name
 
-        # Launch the resolved application safely using shell execution (prevents space-in-path bugs)
+        # Security: block shell metacharacters that could enable injection
+        DANGEROUS = ["&", "|", ";", "`", "$", ">", "<", "\n", "\r"]
+        if any(c in executable for c in DANGEROUS):
+            return f"Error: nombre de aplicación contiene caracteres inválidos."
+
+        # Launch without shell=True to prevent injection
         try:
             os.startfile(executable)
         except Exception:
-            # Fallback for raw commands
-            # If path has spaces, wrap in double quotes for safe shell launching
-            cmd_exec = f'"{executable}"' if " " in executable and not executable.startswith('"') else executable
-            subprocess.Popen(cmd_exec, shell=True)
+            # Fallback: launch as list (no shell) to avoid injection
+            try:
+                subprocess.Popen([executable], shell=False,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
+            except Exception:
+                # Last resort for .exe names without full path
+                subprocess.Popen(executable, shell=False,
+                                 creationflags=subprocess.CREATE_NO_WINDOW)
 
         msg = f"Abriendo la aplicación: '{app_name}'."
         if player:
