@@ -66,5 +66,12 @@ edge-tts
 # ── Voice activity detection (offline wake word) ──────────────────────────────
 vosk
 
+# ── Notificaciones de Windows (detectar mensajes WhatsApp/Mail entrantes) ─────
+winrt-runtime
+winrt-Windows.UI.Notifications
+winrt-Windows.UI.Notifications.Management
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+
 # ── Security ──────────────────────────────────────────────────────────────────
 cryptography

@@ -527,6 +527,30 @@ def t_autonomy_daemon():
     return f"idle={idle:.0f}s daemon start/stop OK"
 
 
+# ── E2E: whatsapp_watch (parser + ciclo de vida, sin WhatsApp real) ──────────
+def t_whatsapp_watch():
+    from actions import whatsapp_watch as ww
+    # Parser del título: "(3) WhatsApp" → 3
+    assert ww._TITLE_RE.search("(3) WhatsApp").group(1) == "3"
+    assert ww._TITLE_RE.search("WhatsApp") is None
+
+    # Ciclo de vida con speak simulado
+    notifications = []
+    r = ww.whatsapp_watch({"action": "start", "mode": "converse", "contact": "Juan"},
+                          speak=lambda m: notifications.append(m))
+    assert "conversación" in r.lower() or "conversacion" in r.lower()
+    st = ww.whatsapp_watch({"action": "status"})
+    assert "Juan" in st and "converse" in st
+    # Simular detección directa
+    ww._state["last_unread"] = 0
+    ww._notify_gemini(2)
+    assert notifications and "WHATSAPP WATCHER" in notifications[-1]
+    assert "action=read" in notifications[-1]
+    r2 = ww.whatsapp_watch({"action": "stop"})
+    assert "detenida" in r2.lower()
+    return "parser + lifecycle + notify OK"
+
+
 TESTS = {
     "memory_e2e":              t_memory_e2e,
     "document_creator_full":   t_document_creator_full,
@@ -552,6 +576,7 @@ TESTS = {
     "self_heal_scan":          t_self_heal_scan,
     "system_repair_reports":   t_system_repair_reports,
     "autonomy_daemon":         t_autonomy_daemon,
+    "whatsapp_watch":          t_whatsapp_watch,
 }
 
 

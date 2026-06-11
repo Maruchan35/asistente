@@ -2165,4 +2165,31 @@ TOOL_DECLARATIONS = [
             "required": ["repair"]
         }
     },
+    {
+        "name": "whatsapp_watch",
+        "description": (
+            "Vigila WhatsApp para DETECTAR MENSAJES ENTRANTES automaticamente — el usuario "
+            "ya no tiene que avisar que llego un mensaje. "
+            "action='start' mode='notify' → avisa al usuario cuando llegue algo. "
+            "action='start' mode='converse' contact='Nombre' → MODO CONVERSACION CONTINUA: "
+            "JARVIS detecta cada mensaje nuevo, lo lee (whatsapp action=read) y responde solo "
+            "(whatsapp action=send), manteniendo la conversacion sin intervencion del usuario. "
+            "Usar cuando digan: 'sigue la conversacion con X', 'avisame si me escriben', "
+            "'responde por mi a X', 'vigila mi whatsapp', 'contesta mis mensajes'. "
+            "action='stop' para detener; action='status' para consultar. "
+            "REQUIERE que WhatsApp Web o Desktop este abierto en una ventana."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["start", "stop", "status"],
+                           "description": "start | stop | status"},
+                "contact": {"type": "STRING",
+                            "description": "Contacto objetivo para modo converse (vacio = cualquiera)"},
+                "mode": {"type": "STRING", "enum": ["notify", "converse"],
+                         "description": "notify = solo avisar al usuario | converse = leer y responder solo"}
+            },
+            "required": ["action"]
+        }
+    },
 ]
