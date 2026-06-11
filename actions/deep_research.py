@@ -571,7 +571,27 @@ def deep_research(parameters: dict, player=None) -> str:
 
     if background:
         try:
-            from core.task_queue import submit
+            from core.task_queue import submit, list_tasks
+
+            # ── Guard anti-duplicados: si YA hay una investigación similar
+            # corriendo, NO arrancar otra (la primera emisión sobrescribiría
+            # el documento con un esqueleto vacío).
+            try:
+                for t in list_tasks(status="running", limit=10):
+                    if not t.title.startswith("Investigación:"):
+                        continue
+                    t_topic = t.title.replace("Investigación:", "").strip().lower()
+                    if (topic[:25].lower() in t.title.lower()
+                            or t_topic[:25] in topic.lower()):
+                        return (
+                            f"YA HAY una investigación sobre ese tema en curso "
+                            f"({int(t.duration_s())}s, {t.progress or 'trabajando'}). "
+                            "NO se inició otra. Informa al usuario que sigue en "
+                            "progreso y que puede preguntar '¿en qué vas?'."
+                        )
+            except Exception:
+                pass
+
             from functools import partial
             # Usar partial para evitar colisión entre el `title` de la TAREA
             # (1er arg de submit) y el `title` del DOCUMENTO (kwarg de _do_research).
@@ -586,9 +606,14 @@ def deep_research(parameters: dict, player=None) -> str:
                 target=bound,
             )
             return (
-                f"Investigación iniciada en segundo plano (tarea {tid}). "
-                f"Estimado: {target_pages//3}-{target_pages//2} minutos para "
-                f"~{target_pages} páginas. Le aviso al terminar, señor."
+                f"INVESTIGACIÓN INICIADA — TODAVÍA NO TERMINADA (tarea {tid}). "
+                f"El archivo '{title}.docx' se irá escribiendo EN VIVO: si el usuario "
+                "lo abre ahora verá secciones con '(Generando contenido...)' — es normal. "
+                f"Tiempo estimado: {max(2, target_pages//3)}-{max(3, target_pages//2)} minutos. "
+                "INSTRUCCIÓN: di al usuario que la investigación COMENZÓ y que le avisarás "
+                "al terminar. PROHIBIDO decir que el documento ya está listo, guardado o "
+                "completado — recibirás una nota interna '(Tarea en segundo plano "
+                "completada...)' cuando de verdad termine."
             )
         except ImportError:
             background = False   # fallback síncrono

@@ -725,13 +725,19 @@ class JarvisLive:
         def _on_task_done(task):
             try:
                 if task.status == "done":
+                    _res_preview = str(task.result)[:250] if task.result else ""
                     self._inject_text(
                         f"(Tarea en segundo plano completada: '{task.title}'. "
-                        f"Notifíquele al usuario de manera breve.)"
+                        f"Resultado real: {_res_preview} — AHORA SÍ está terminada: "
+                        "avisa al usuario en una frase, mencionando el archivo si aplica.)"
                     )
                 elif task.status == "failed":
                     self._inject_text(
                         f"(Tarea '{task.title}' falló: {task.error}. Reporte al usuario.)"
+                    )
+                elif task.status == "cancelled":
+                    self._inject_text(
+                        f"(Tarea '{task.title}' fue cancelada. Confirma al usuario brevemente.)"
                     )
             except Exception:
                 pass

@@ -108,9 +108,15 @@ NUNCA digas "no puedo hacer eso" si un comando de terminal podría resolverlo.
 
 ## TAREAS LARGAS EN SEGUNDO PLANO
 
-- `deep_research` y similares devuelven un task_id al instante y corren solas.
-- Cuando termine, recibirás una nota interna `(Tarea completada: 'X')` → avísale
-  al usuario en una frase. NO repitas el contenido completo.
+- `deep_research` y similares devuelven un task_id AL INSTANTE — eso solo confirma
+  que la tarea COMENZÓ, no que terminó.
+- **PROHIBIDO anunciar "documento listo/guardado/completado" tras llamar la herramienta.**
+  La señal REAL de fin es la nota interna `(Tarea en segundo plano completada: ...)` —
+  solo al recibirla puedes decir que está listo.
+- Mientras corre, el archivo se escribe en vivo: si el usuario lo abre y ve
+  "(Generando contenido...)" explícale que sigue en progreso y cuánto falta.
+- Cuando termine de verdad, avisa en una frase con el nombre del archivo. NO repitas
+  el contenido completo.
 - "extiéndelo más" sobre un documento ya generado → `deep_research` de nuevo con
   MÁS target_pages y el MISMO title (se sobrescribe). NUNCA pegues markdown en el chat.
 
