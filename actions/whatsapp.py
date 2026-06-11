@@ -441,8 +441,75 @@ def whatsapp(parameters: dict, player=None) -> str:
 
     # ── LEER ─────────────────────────────────────────────────────────────────
     elif action == "read":
-        webbrowser.open("https://web.whatsapp.com")
-        return "Abriendo WhatsApp Web para visualizar tus chats."
+        # LECTURA REAL: navegar al chat (si se indica receiver) y transcribir
+        # el contenido visible con visión multimodal. Antes esto era un stub
+        # que solo abría el navegador — en modo conversación autónoma Gemini
+        # "leía" sin recibir nada y respondía a ciegas en el chat equivocado.
+        if not pyautogui:
+            return "Error: pyautogui no está instalado."
+
+        # 1. Activar la ventana de WhatsApp (sin abrir una nueva)
+        import pygetwindow as gw
+        wsp_window = None
+        for win in gw.getAllWindows():
+            t = (win.title or "").lower()
+            if "whatsapp" in t:
+                wsp_window = win
+                break
+        if wsp_window is None:
+            webbrowser.open("https://web.whatsapp.com")
+            return ("WhatsApp no estaba abierto — lo estoy abriendo. "
+                    "Espera unos segundos y vuelve a llamar read.")
+        try:
+            if wsp_window.isMinimized:
+                wsp_window.restore()
+            wsp_window.activate()
+            time.sleep(0.8)
+        except Exception:
+            pass
+
+        # 2. Si hay receiver → ENTRAR a ese chat antes de leer
+        if receiver:
+            phone, target_desc = _resolve_phone(receiver, contacts)
+            ok = _navigate_to_contact(phone, receiver, target_desc, contacts, player)
+            if not ok:
+                return f"No se pudo abrir el chat de '{target_desc}'."
+            time.sleep(1.0)
+
+        # 3. Transcribir con visión
+        try:
+            from actions.screen_vision import screen_vision
+        except ImportError:
+            return "Error: módulo de visión no disponible para leer el chat."
+
+        if receiver:
+            question = (
+                "Estás viendo WhatsApp Web con un chat abierto. Transcribe los "
+                "últimos mensajes visibles (máximo 12, en orden de arriba a abajo) "
+                "en formato exacto:\n"
+                "CHAT: <nombre del contacto del chat abierto>\n"
+                "<Remitente>: <mensaje>\n"
+                "Los mensajes alineados a la DERECHA son del usuario (etiqueta 'Yo'), "
+                "los de la IZQUIERDA son del contacto. Incluye solo la transcripción, "
+                "sin comentarios."
+            )
+        else:
+            question = (
+                "Estás viendo WhatsApp Web. Mira la BARRA LATERAL de chats y lista "
+                "los que tienen mensajes SIN LEER (badge verde con número), en formato:\n"
+                "NO_LEIDOS:\n- <nombre del chat> (<n> mensajes)\n"
+                "Si ninguno tiene badge, responde exactamente: NO_LEIDOS: ninguno. "
+                "Solo la lista, sin comentarios."
+            )
+
+        r = screen_vision({"action": "question", "question": question}, player=player)
+        if not r:
+            return "No pude leer la pantalla de WhatsApp."
+        if receiver:
+            return (f"Contenido del chat con '{receiver}':\n{r}\n"
+                    "(Para responder usa whatsapp action=send con este receiver.)")
+        return (f"{r}\n(Para leer un chat concreto: whatsapp action=read "
+                "receiver='<nombre>'. Para responder: action=send.)")
 
     else:
         webbrowser.open("https://web.whatsapp.com")

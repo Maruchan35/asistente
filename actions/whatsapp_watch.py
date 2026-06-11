@@ -65,15 +65,26 @@ def _notify_gemini(unread: int):
     contact = _state["contact"]
     mode = _state["mode"]
     if mode == "converse":
-        who = f" de {contact}" if contact else ""
-        msg = (
-            f"(WHATSAPP WATCHER: llegó mensaje nuevo{who} — {unread} sin leer. "
-            "Estás en MODO CONVERSACIÓN: 1) lee el chat con whatsapp action=read"
-            + (f" receiver='{contact}'" if contact else "")
-            + ", 2) responde apropiadamente con whatsapp action=send manteniendo "
-            "el contexto y tono de la conversación, 3) NO avises al usuario por voz "
-            "salvo que el mensaje sea importante o la conversación necesite su decisión.)"
-        )
+        if contact:
+            msg = (
+                f"(WHATSAPP WATCHER: llegó mensaje nuevo — {unread} sin leer. "
+                f"MODO CONVERSACIÓN con '{contact}': "
+                f"1) whatsapp action=read receiver='{contact}' — esto ENTRA al chat "
+                "y te devuelve la transcripción real de los últimos mensajes; "
+                f"2) responde con whatsapp action=send receiver='{contact}' "
+                "manteniendo contexto y tono del chat; "
+                "3) NO avises al usuario por voz salvo mensaje importante.)"
+            )
+        else:
+            msg = (
+                f"(WHATSAPP WATCHER: llegó mensaje nuevo — {unread} sin leer. "
+                "MODO CONVERSACIÓN sin contacto fijo: "
+                "1) whatsapp action=read SIN receiver — te dirá QUÉ chats tienen "
+                "mensajes sin leer; "
+                "2) whatsapp action=read receiver='<nombre>' para ENTRAR y leer ese chat; "
+                "3) responde con whatsapp action=send receiver='<nombre>'; "
+                "4) NO avises al usuario por voz salvo mensaje importante.)"
+            )
     else:
         msg = (
             f"(WHATSAPP WATCHER: hay {unread} mensaje(s) de WhatsApp sin leer. "

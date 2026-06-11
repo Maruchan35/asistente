@@ -201,7 +201,10 @@ TOOL_DECLARATIONS = [
             "guardar/listar contactos con su número de teléfono. "
             "Para enviar, primero verificar si el contacto está guardado con su teléfono. "
             "Si no está, pedir el número al usuario o usar add_contact primero. "
-            "Para enviar un documento usar action='send_document' con file_path=ruta del archivo."
+            "Para enviar un documento usar action='send_document' con file_path=ruta del archivo. "
+            "LEER CHATS: action='read' SIN receiver lista que chats tienen mensajes sin leer; "
+            "action='read' CON receiver ENTRA a ese chat y devuelve la transcripcion REAL de los "
+            "ultimos mensajes (no respondas a un mensaje sin leerlo primero asi)."
         ),
         "parameters": {
             "type": "OBJECT",
