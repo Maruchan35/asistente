@@ -72,8 +72,10 @@ def _notify_gemini(unread: int):
                 f"1) whatsapp action=read receiver='{contact}' — esto ENTRA al chat "
                 "y te devuelve la transcripción real de los últimos mensajes; "
                 f"2) responde con whatsapp action=send receiver='{contact}' "
-                "manteniendo contexto y tono del chat; "
-                "3) NO avises al usuario por voz salvo mensaje importante.)"
+                "manteniendo contexto y tono del chat (el chat se cierra solo "
+                "tras enviar, para poder detectar el siguiente mensaje); "
+                "3) si decides NO responder, llama whatsapp action=close_chat; "
+                "4) NO avises al usuario por voz salvo mensaje importante.)"
             )
         else:
             msg = (
@@ -82,8 +84,10 @@ def _notify_gemini(unread: int):
                 "1) whatsapp action=read SIN receiver — te dirá QUÉ chats tienen "
                 "mensajes sin leer; "
                 "2) whatsapp action=read receiver='<nombre>' para ENTRAR y leer ese chat; "
-                "3) responde con whatsapp action=send receiver='<nombre>'; "
-                "4) NO avises al usuario por voz salvo mensaje importante.)"
+                "3) responde con whatsapp action=send receiver='<nombre>' (el chat "
+                "se cierra solo tras enviar); "
+                "4) si decides NO responder, llama whatsapp action=close_chat; "
+                "5) NO avises al usuario por voz salvo mensaje importante.)"
             )
     else:
         msg = (
@@ -133,6 +137,21 @@ def _loop():
         except Exception:
             pass
         _stop.wait(_POLL_S)
+
+
+def is_converse_active() -> bool:
+    """¿Está el watcher en modo conversación? (usado por whatsapp.py para
+    cerrar el chat tras responder — si el chat queda abierto, WhatsApp marca
+    los mensajes entrantes como leídos al instante y el contador '(N)' del
+    título nunca aparece → el watcher queda ciego)."""
+    return _active and _state.get("mode") == "converse"
+
+
+def reset_baseline() -> None:
+    """Re-sincronizar el contador tras una acción nuestra (enviar/leer)."""
+    n = _get_whatsapp_unread()
+    if n >= 0:
+        _state["last_unread"] = n
 
 
 def whatsapp_watch(parameters: dict, player=None, speak=None) -> str:

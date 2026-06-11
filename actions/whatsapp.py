@@ -140,20 +140,57 @@ def _copy_file_to_clipboard(file_path: str) -> bool:
         print(f"[WhatsApp] Error copiando al portapapeles: {e}")
         return False
 
+# ── Control de apertura de pestañas ───────────────────────────────────────────
+# webbrowser.open() crea una pestaña NUEVA cada vez. En el loop autónomo
+# (watcher → read → send cada pocos segundos) una detección de ventana fallida
+# abría decenas de pestañas. Regla: solo abrir si NO existe ventana de WhatsApp
+# y no se abrió otra en los últimos 30s.
+_last_open_ts = 0.0
+
+
+def _find_whatsapp_window():
+    """Buscar la ventana de WhatsApp (Web en navegador o Desktop).
+    Preferir navegador; aceptar cualquier título con 'whatsapp'."""
+    try:
+        import pygetwindow as gw
+        fallback = None
+        for win in gw.getAllWindows():
+            t = (win.title or "").lower()
+            if "whatsapp" not in t:
+                continue
+            if any(b in t for b in ("chrome", "opera", "edge", "brave", "firefox")):
+                return win          # navegador con WhatsApp activo — ideal
+            if fallback is None:
+                fallback = win      # cualquier otra ventana de WhatsApp
+        return fallback
+    except Exception:
+        return None
+
+
+def _open_whatsapp_web_once(url: str = "https://web.whatsapp.com", player=None) -> bool:
+    """Abrir WhatsApp Web SOLO si no hay ventana ya y respetando cooldown.
+    Devuelve True si abrió una pestaña nueva."""
+    global _last_open_ts
+    if _find_whatsapp_window() is not None:
+        return False
+    now = time.time()
+    if now - _last_open_ts < 30:
+        if player:
+            try: player.write_log("⏳ WhatsApp ya se está abriendo — esperando carga...")
+            except: pass
+        return False
+    _last_open_ts = now
+    webbrowser.open(url)
+    return True
+
+
 def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
                           contacts: dict, player=None) -> bool:
     """
     Abre WhatsApp Web en el chat del contacto indicado.
     Devuelve True si se pudo navegar, False si hubo error.
     """
-    import pygetwindow as gw
-
-    wsp_window = None
-    for win in gw.getAllWindows():
-        t = win.title.lower()
-        if "whatsapp" in t and any(b in t for b in ("chrome","opera","edge","brave","firefox")):
-            wsp_window = win
-            break
+    wsp_window = _find_whatsapp_window()
 
     if wsp_window:
         if player:
@@ -180,19 +217,24 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
         time.sleep(1.2)
         return True
     else:
-        # Abrir WhatsApp Web con URL directa
-        encoded_msg = ""
-        if phone:
-            url = f"https://web.whatsapp.com/send?phone={phone}"
-        else:
-            url = "https://web.whatsapp.com"
+        # No hay ventana de WhatsApp — abrir UNA pestaña (con cooldown anti-spam)
+        url = (f"https://web.whatsapp.com/send?phone={phone}" if phone
+               else "https://web.whatsapp.com")
 
         if player:
             try: player.write_log(f"💬 Abriendo WhatsApp Web → {target_desc}")
             except: pass
 
-        webbrowser.open(url)
-        time.sleep(13)   # Esperar carga
+        opened = _open_whatsapp_web_once(url, player)
+        if not opened:
+            # Ya había/se está abriendo una — esperar a que aparezca y reintentar
+            for _ in range(10):
+                time.sleep(1.5)
+                if _find_whatsapp_window() is not None:
+                    return _navigate_to_contact(phone, receiver, target_desc,
+                                                contacts, player)
+            return False
+        time.sleep(13)   # Esperar carga de la pestaña nueva
 
         if not phone:
             pyautogui.hotkey("ctrl", "alt", "/")
@@ -201,7 +243,7 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
             time.sleep(0.2)
             pyautogui.press("backspace")
             time.sleep(0.4)
-            pyautogui.write(target_desc, interval=0.02)
+            _paste_text(_ascii_fold(target_desc), player)
             time.sleep(2.5)
             pyautogui.press("enter")
             time.sleep(1.5)
@@ -294,6 +336,21 @@ def whatsapp(parameters: dict, player=None) -> str:
             if player:
                 try: player.write_log(f"✅ Mensaje enviado a {target_desc}")
                 except: pass
+
+            # MODO CONVERSACIÓN: cerrar el chat tras responder (Escape).
+            # Si el chat queda abierto y enfocado, WhatsApp marca los mensajes
+            # entrantes como leídos AL INSTANTE → el contador '(N)' del título
+            # nunca aparece → el watcher no detecta la respuesta del contacto.
+            try:
+                from actions.whatsapp_watch import is_converse_active, reset_baseline
+                if is_converse_active():
+                    time.sleep(0.5)
+                    pyautogui.press("escape")   # cierra el chat actual
+                    time.sleep(0.5)
+                    reset_baseline()            # re-sincronizar contador
+            except Exception:
+                pass
+
             return f"Mensaje enviado a '{target_desc}' por WhatsApp."
 
         # ── ENVIAR IMAGEN ─────────────────────────────────────────────────
@@ -449,17 +506,13 @@ def whatsapp(parameters: dict, player=None) -> str:
             return "Error: pyautogui no está instalado."
 
         # 1. Activar la ventana de WhatsApp (sin abrir una nueva)
-        import pygetwindow as gw
-        wsp_window = None
-        for win in gw.getAllWindows():
-            t = (win.title or "").lower()
-            if "whatsapp" in t:
-                wsp_window = win
-                break
+        wsp_window = _find_whatsapp_window()
         if wsp_window is None:
-            webbrowser.open("https://web.whatsapp.com")
-            return ("WhatsApp no estaba abierto — lo estoy abriendo. "
-                    "Espera unos segundos y vuelve a llamar read.")
+            opened = _open_whatsapp_web_once(player=player)
+            return ("WhatsApp no estaba abierto — "
+                    + ("lo estoy abriendo" if opened else "ya se está abriendo")
+                    + ". Espera ~10 segundos y vuelve a llamar read. "
+                    "NO llames read repetidamente sin esperar.")
         try:
             if wsp_window.isMinimized:
                 wsp_window.restore()
@@ -511,6 +564,33 @@ def whatsapp(parameters: dict, player=None) -> str:
         return (f"{r}\n(Para leer un chat concreto: whatsapp action=read "
                 "receiver='<nombre>'. Para responder: action=send.)")
 
+    elif action == "close_chat":
+        # Cerrar el chat abierto (Escape) — necesario en modo conversación
+        # cuando se decide NO responder, para que el watcher siga detectando.
+        if not pyautogui:
+            return "Error: pyautogui no está instalado."
+        win = _find_whatsapp_window()
+        if win is None:
+            return "No hay ventana de WhatsApp abierta."
+        try:
+            if win.isMinimized:
+                win.restore()
+            win.activate()
+            time.sleep(0.5)
+        except Exception:
+            pass
+        pyautogui.press("escape")
+        time.sleep(0.3)
+        try:
+            from actions.whatsapp_watch import reset_baseline
+            reset_baseline()
+        except Exception:
+            pass
+        return "Chat cerrado — el watcher vuelve a detectar mensajes entrantes."
+
     else:
-        webbrowser.open("https://web.whatsapp.com")
-        return f"Abriendo WhatsApp Web (acción: {action})."
+        # NO abrir el navegador con acciones desconocidas — en el loop autónomo
+        # cada llamada errada abría una pestaña más.
+        return (f"Acción '{action}' no reconocida. Acciones válidas: "
+                "send | send_image | send_document | read | close_chat | "
+                "add_contact | list_contacts | delete_contact.")
