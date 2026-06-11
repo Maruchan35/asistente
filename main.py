@@ -1342,6 +1342,10 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
+        # Event loop al INICIO — las ramas tempranas (self_update, doc_search...)
+        # lo usan antes de la asignación que vive más abajo en la función.
+        loop = asyncio.get_running_loop()
+
         # Tiempo inicial para medir duración
         _tool_t0 = time.time()
         _jlog_tool(name, args=args, success=True, result_preview="[started]")
