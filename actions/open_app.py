@@ -15,7 +15,11 @@ def find_executable(app_name: str) -> str:
         os.path.join(os.environ.get("LocalAppData", ""), "Programs"),
         "C:\\Windows\\System32",
         os.path.join(os.path.expanduser("~"), "Desktop"),
-        os.path.join(os.environ.get("APPDATA", ""), "Microsoft\\Windows\\Start Menu\\Programs")
+        os.path.join(os.environ.get("APPDATA", ""), "Microsoft\\Windows\\Start Menu\\Programs"),
+        # Start Menu del SISTEMA — aquí viven los accesos directos de la
+        # mayoría de las apps instaladas (incluidas las de Microsoft Store)
+        os.path.join(os.environ.get("ProgramData", "C:\\ProgramData"),
+                     "Microsoft\\Windows\\Start Menu\\Programs"),
     ]
     
     doc_search_dirs = [
@@ -140,13 +144,56 @@ def open_app(parameters: dict, response=None, player=None) -> str:
         }
 
         executable = mappings.get(app_lower, None)
-        
+
         # 5. If not in static mappings, use our heuristics search
         if not executable:
             executable = find_executable(app_name)
 
-        # 6. Fallback to trying to run it directly if still not found
+        # ── Fallbacks web para apps que suelen NO estar instaladas como .exe ──
+        # (WhatsApp/Telegram en versión web, etc.) Solo se usan si no se
+        # encontró ejecutable local.
+        WEB_FALLBACKS = {
+            "whatsapp":      "https://web.whatsapp.com",
+            "whatsapp web":  "https://web.whatsapp.com",
+            "telegram":      "https://web.telegram.org",
+            "youtube":       "https://www.youtube.com",
+            "gmail":         "https://mail.google.com",
+            "netflix":       "https://www.netflix.com",
+            "spotify web":   "https://open.spotify.com",
+            "discord web":   "https://discord.com/app",
+            "twitter":       "https://x.com",
+            "x":             "https://x.com",
+        }
+        # Nombres de navegador: si piden uno que no está instalado,
+        # abrir el navegador PREDETERMINADO del sistema en su lugar.
+        BROWSER_NAMES = {"chrome", "google chrome", "firefox", "edge",
+                         "brave", "opera", "navegador", "browser"}
+
+        def _web_fallback() -> str | None:
+            """Intentar abrir versión web / navegador predeterminado."""
+            if app_lower in WEB_FALLBACKS:
+                webbrowser.open(WEB_FALLBACKS[app_lower])
+                m = (f"'{app_name}' no está instalada como aplicación — "
+                     f"abrí la versión web en tu navegador.")
+                if player:
+                    try: player.write_log(f"🌐 {m}")
+                    except: pass
+                return m
+            if app_lower in BROWSER_NAMES:
+                webbrowser.open("https://www.google.com")
+                m = (f"'{app_name}' no está instalado — abrí tu navegador "
+                     "predeterminado en su lugar.")
+                if player:
+                    try: player.write_log(f"🌐 {m}")
+                    except: pass
+                return m
+            return None
+
+        # 6. Si no hay ejecutable, probar fallback web ANTES del intento ciego
         if not executable:
+            fb = _web_fallback()
+            if fb:
+                return fb
             executable = app_name
 
         # Security: block shell metacharacters that could enable injection
@@ -163,7 +210,11 @@ def open_app(parameters: dict, response=None, player=None) -> str:
                 subprocess.Popen([executable], shell=False,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
             except Exception:
-                # Last resort for .exe names without full path
+                # Último intento antes de rendirse: fallback web
+                # (ej. mapping 'chrome.exe' estaba pero Chrome no está instalado)
+                fb = _web_fallback()
+                if fb:
+                    return fb
                 subprocess.Popen(executable, shell=False,
                                  creationflags=subprocess.CREATE_NO_WINDOW)
 
@@ -173,5 +224,6 @@ def open_app(parameters: dict, response=None, player=None) -> str:
         return f"Aplicación '{app_name}' iniciada correctamente (Ruta: {executable})."
 
     except Exception as e:
-        traceback.print_exc()
-        return f"Error intentando abrir '{app_name}': {str(e)}"
+        # Una sola línea de error — sin triple traceback en consola
+        return (f"No pude abrir '{app_name}': {str(e)[:100]}. "
+                "Verifica que esté instalada o dime el nombre exacto.")
