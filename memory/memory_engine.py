@@ -176,8 +176,9 @@ _FACT_PATTERNS: list[tuple] = [
     (r"\bmi (?:correo|email)\s+(?:es|:)\s+([\w.+-]+@[\w.]+\.\w+)", "preferences", "email", 1),
     # Phone
     (r"\bmi (?:tel[eé]fono|cel(?:ular)?|n[uú]mero)\s+(?:es|:)\s+([\d\s\-+()]{7,15})", "preferences", "telefono", 1),
-    # Preferences: "me gusta / prefiero / me encanta X"
-    (r"\b(?:me gusta|me encanta|prefiero|me fascina)\s+(.{4,60}?)(?:\.|,|$)", "preferences", "gusto", 1),
+    # Preferences: "me gusta / prefiero / me encanta X" — exigir sustantivo real
+    # (mínimo 2 palabras o 1 palabra de 5+ letras; evita capturar "esa", "eso")
+    (r"\b(?:me gusta|me encanta|prefiero|me fascina)\s+((?:el|la|los|las|un|una)?\s*\w{5,}(?:\s+\w+){0,6}?)(?:\.|,|$)", "preferences", "gusto", 1),
     # Work
     (r"\b(?:trabajo en|mi trabajo es|mi empresa es)\s+(.{3,50}?)(?:\.|,|$)", "facts", "trabajo", 1),
     # Schedule
@@ -189,20 +190,44 @@ _FACT_PATTERNS: list[tuple] = [
     (r"\bmi (?:m[uú]sica|artista|banda) favorit[ao]\s+(?:es|:)\s+(.{3,40}?)(?:\.|,|$)", "preferences", "favorito_musica", 1),
 ]
 
-def auto_extract_facts(user_text: str, jarvis_text: str) -> list[tuple[str,str,str]]:
+# Palabras de respuesta de JARVIS que delatan un valor contaminado
+_JUNK_WORDS = {
+    "anotado", "entendido", "guardado", "registrado", "perfecto", "listo",
+    "señor", "senor", "naturalmente", "considerelo", "como guste",
+}
+
+
+def _clean_extracted_value(val: str) -> str:
+    """Recortar el valor en el primer signo de que empezó la respuesta de
+    JARVIS o terminó la frase del usuario (mayúscula tras espacio, junk word)."""
+    val = val.strip().rstrip(".,;:")
+    words = val.split()
+    cleaned: list[str] = []
+    for w in words:
+        if w.lower().strip(".,") in _JUNK_WORDS:
+            break   # empezó la confirmación de JARVIS — cortar aquí
+        cleaned.append(w)
+    return " ".join(cleaned).strip()
+
+
+def auto_extract_facts(user_text: str, jarvis_text: str = "") -> list[tuple[str,str,str]]:
     """
-    Scan user + JARVIS text for auto-saveable facts.
+    Scan USER text (only) for auto-saveable facts.
     Returns list of (category, key, value) tuples.
+
+    IMPORTANTE: solo se analiza el texto del usuario. Antes se concatenaba
+    también la respuesta de JARVIS, y los regex capturaban palabras de la
+    confirmación ("Anotado, señor") como parte del valor → memoria corrupta
+    tipo "ubicacion = México Anotado".
     """
-    combined = f"{user_text} {jarvis_text}".lower()
-    original = f"{user_text} {jarvis_text}"   # keep case for values
+    original = user_text or ""
     found = []
     seen_keys: set[str] = set()
 
     for pattern, cat, key_tpl, grp in _FACT_PATTERNS:
         for m in re.finditer(pattern, original, re.IGNORECASE):
             try:
-                val = m.group(grp).strip().rstrip(".,")
+                val = _clean_extracted_value(m.group(grp))
                 if len(val) < 3:
                     continue
                 # Make key unique if duplicate (e.g. two "gusto" entries)
@@ -215,6 +240,31 @@ def auto_extract_facts(user_text: str, jarvis_text: str) -> list[tuple[str,str,s
                 pass
 
     return found
+
+
+def clean_corrupted_facts() -> int:
+    """Sanear la memoria existente: recortar valores que contienen palabras
+    de confirmación de JARVIS. Devuelve cuántas entradas se limpiaron."""
+    cleaned = 0
+    with _lock:
+        mem = _load_json(_LT, _empty_lt())
+        for cat, items in mem.items():
+            if not isinstance(items, dict):
+                continue
+            for key, val in list(items.items()):
+                v = val.get("value") if isinstance(val, dict) else None
+                if not isinstance(v, str):
+                    continue
+                new_v = _clean_extracted_value(v)
+                if new_v != v:
+                    if len(new_v) < 3:
+                        del items[key]          # quedó vacío — fuera
+                    else:
+                        val["value"] = new_v
+                    cleaned += 1
+        if cleaned:
+            _save_json(_LT, mem)
+    return cleaned
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SESSION JOURNAL  (per-day JSONL file)
