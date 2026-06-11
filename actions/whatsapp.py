@@ -30,12 +30,67 @@ def save_contacts(contacts: dict):
     CONTACTS_FILE.write_text(json.dumps(contacts, indent=4, ensure_ascii=False), encoding="utf-8")
 
 def clean_text(text: str) -> str:
+    """Antes mutilaba acentos porque pyautogui no podía teclearlos. Ahora que
+    escribimos vía portapapeles, SOLO limpiamos caracteres de control invisibles
+    y conservamos acentos/ñ/¿/emojis intactos para mensajes naturales."""
+    if not text:
+        return ""
+    # Quitar solo controles (excepto saltos de línea y tabs que pueden ser válidos)
+    return "".join(c for c in text
+                   if c in ("\n", "\t") or unicodedata.category(c)[0] != "C")
+
+
+def _ascii_fold(text: str) -> str:
+    """Versión sin acentos/minúsculas — para BUSCAR contactos (la búsqueda de
+    WhatsApp es tolerante, y así evitamos depender del layout del teclado)."""
     if not text:
         return ""
     text = text.lower()
-    text = "".join(c for c in unicodedata.normalize("NFD", text)
+    return "".join(c for c in unicodedata.normalize("NFD", text)
                    if unicodedata.category(c) != "Mn")
-    return text
+
+
+def _paste_text(text: str, player=None) -> bool:
+    """Escribir texto vía PORTAPAPELES (copiar + Ctrl+V) en lugar de teclear
+    letra por letra. Evita por completo:
+      • que acentos/ñ/¿/@ se generen con AltGr (Ctrl+Alt) y disparen atajos
+        de WhatsApp Web (Ctrl+Alt+/ = buscar, etc.) abriendo diálogos por error
+      • caracteres perdidos por diferencias de layout de teclado
+      • lentitud de escribir carácter por carácter
+    Preserva el portapapeles original del usuario."""
+    if not text:
+        return True
+    # Guardar portapapeles actual para restaurarlo
+    prev = None
+    try:
+        import pyperclip
+        try:
+            prev = pyperclip.paste()
+        except Exception:
+            prev = None
+        pyperclip.copy(text)
+        time.sleep(0.15)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.25)
+        # Restaurar portapapeles del usuario (tras un instante para que pegue)
+        if prev is not None:
+            def _restore():
+                time.sleep(1.0)
+                try: pyperclip.copy(prev)
+                except Exception: pass
+            import threading
+            threading.Thread(target=_restore, daemon=True).start()
+        return True
+    except Exception as e:
+        # Fallback: escribir directo (puede fallar con acentos, pero mejor que nada)
+        if player:
+            try: player.write_log(f"⚠️ Portapapeles falló ({e}), tecleando directo")
+            except: pass
+        try:
+            pyautogui.write(text, interval=0.02)
+            return True
+        except Exception:
+            return False
 
 def _resolve_file_path(raw: str) -> Path:
     """Resuelve rutas relativas con palabras clave a rutas absolutas."""
@@ -118,7 +173,8 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
         time.sleep(0.2)
         pyautogui.press("backspace")
         time.sleep(0.4)
-        pyautogui.write(target_desc, interval=0.02)
+        # Buscar por nombre sin acentos vía portapapeles (evita disparar atajos)
+        _paste_text(_ascii_fold(target_desc), player)
         time.sleep(2.2)
         pyautogui.press("enter")
         time.sleep(1.2)
@@ -231,7 +287,7 @@ def whatsapp(parameters: dict, player=None) -> str:
         if action == "send":
             if not message:
                 return "Error: Falta el mensaje ('message')."
-            pyautogui.write(message, interval=0.02)
+            _paste_text(message, player)
             time.sleep(0.4)
             pyautogui.press("enter")
             time.sleep(0.8)
@@ -273,7 +329,7 @@ def whatsapp(parameters: dict, player=None) -> str:
             pyautogui.hotkey("ctrl", "v")
             time.sleep(3.0)
             if caption:
-                pyautogui.write(caption, interval=0.02)
+                _paste_text(caption, player)
                 time.sleep(0.3)
             pyautogui.press("enter")
             time.sleep(1.0)
@@ -347,7 +403,7 @@ def whatsapp(parameters: dict, player=None) -> str:
 
                 # 5. Agregar caption si se proporcionó
                 if caption:
-                    pyautogui.write(caption, interval=0.02)
+                    _paste_text(caption, player)
                     time.sleep(0.3)
 
                 # 6. Enviar
@@ -369,7 +425,7 @@ def whatsapp(parameters: dict, player=None) -> str:
                     pyautogui.hotkey("ctrl", "v")
                     time.sleep(4.0)
                     if caption:
-                        pyautogui.write(caption, interval=0.02)
+                        _paste_text(caption, player)
                         time.sleep(0.3)
                     pyautogui.press("enter")
                     time.sleep(1.5)
