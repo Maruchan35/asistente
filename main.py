@@ -436,6 +436,14 @@ try:
 except ImportError:
     pair_programming = None
 try:
+    from actions.self_update       import self_update
+except ImportError:
+    self_update = None
+try:
+    from actions.doc_search        import doc_search
+except ImportError:
+    doc_search = None
+try:
     from actions.notion_control    import notion_control
 except ImportError:
     notion_control = None
@@ -1146,6 +1154,60 @@ TOOL_DECLARATIONS = [
         }
     },
     {
+        "name": "self_update",
+        "description": (
+            "Actualiza JARVIS desde GitHub. action='check' para ver si hay versión nueva, "
+            "action='update' para aplicar la actualización (git pull + dependencias), "
+            "action='restart' para reiniciar JARVIS y aplicar cambios. "
+            "Usar cuando el usuario diga 'actualízate', '¿hay actualizaciones?', "
+            "'ponte al día', 'reinicia jarvis'. "
+            "FLUJO: check primero → confirmar con el usuario → update → ofrecer restart."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {
+                    "type": "STRING",
+                    "description": "'check' | 'update' | 'restart'",
+                    "enum": ["check", "update", "restart"]
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "doc_search",
+        "description": (
+            "Busca DENTRO del contenido de los documentos del usuario (Word, PDF, TXT, "
+            "PowerPoint) en Desktop, Documents y Downloads. "
+            "Usar cuando el usuario pregunte sobre el CONTENIDO de sus archivos: "
+            "'¿qué decía mi documento de X?', 'busca en mis apuntes Y', "
+            "'¿en qué archivo hablo de Z?', '¿qué documentos tengo sobre W?'. "
+            "NO usar para buscar archivos POR NOMBRE (eso es file_controller) "
+            "ni para buscar en internet (eso es web_search). "
+            "action='search' busca; action='reindex' reconstruye el índice (lento, "
+            "solo si el usuario dice que faltan documentos recientes)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Qué buscar dentro de los documentos"
+                },
+                "action": {
+                    "type": "STRING",
+                    "description": "'search' (default) | 'reindex' | 'stats'",
+                    "enum": ["search", "reindex", "stats"]
+                },
+                "max_results": {
+                    "type": "INTEGER",
+                    "description": "Máximo de documentos a devolver (default 5)"
+                }
+            }
+        }
+    },
+    {
         "name": "pair_programming",
         "description": (
             "Activar / desactivar modo 'pair programmer'. Cuando está activo, JARVIS captura "
@@ -1203,9 +1265,10 @@ TOOL_DECLARATIONS = [
     {
         "name": "task_status",
         "description": (
-            "Reports the status of background tasks JARVIS is running. "
-            "Call this when the user asks '¿en qué vas?', '¿cómo va la tarea?', "
-            "'qué estás haciendo', or wants a status update on long-running operations. "
+            "Reports or CANCELS background tasks JARVIS is running. "
+            "Call with action='summary' when the user asks '¿en qué vas?', '¿cómo va la tarea?'. "
+            "Call with action='cancel' when the user says 'cancela la investigación', "
+            "'detén la tarea', 'para eso', 'ya no lo quiero'. "
             "Returns a human-readable summary."
         ),
         "parameters": {
@@ -1213,8 +1276,12 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action": {
                     "type": "STRING",
-                    "description": "'list' to see running tasks, 'summary' for a brief voice summary",
-                    "enum": ["list", "summary"]
+                    "description": "'list' = ver tareas, 'summary' = resumen breve, 'cancel' = cancelar tarea en curso",
+                    "enum": ["list", "summary", "cancel"]
+                },
+                "title": {
+                    "type": "STRING",
+                    "description": "Para cancel: parte del título de la tarea a cancelar. Si se omite, cancela la más reciente en curso."
                 }
             }
         }
@@ -2296,6 +2363,14 @@ TOOL_DECLARATIONS = [
                 "working_directory": {
                     "type": "STRING",
                     "description": "Directorio de trabajo para el comando (opcional)"
+                },
+                "confirmed": {
+                    "type": "BOOLEAN",
+                    "description": (
+                        "SOLO pasar true cuando el usuario YA confirmó verbalmente un comando "
+                        "que el sandbox bloqueó por riesgo HIGH/CRITICAL. Nunca pasar true "
+                        "en la primera llamada."
+                    )
                 }
             },
             "required": ["command"]
@@ -2719,6 +2794,22 @@ class JarvisLive:
                 self._loop
             )
 
+    def _inject_context(self, text: str):
+        """Inyectar contexto SILENCIOSO (no provoca respuesta del modelo).
+        Usado para hints de emoción, reglas aprendidas, estado de focus —
+        el modelo lo verá en su próximo turno sin hablar ahora."""
+        if self._loop and self.session:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.session.send_client_content(
+                        turns={"parts": [{"text": text}]},
+                        turn_complete=False
+                    ),
+                    self._loop
+                )
+            except Exception:
+                pass
+
     def _on_file_analyze(self, content: str, filename: str, path: str):
         """
         Called when the user clicks '📖 Analizar con JARVIS' in Files Drop.
@@ -2988,11 +3079,23 @@ class JarvisLive:
 
     def set_speaking(self, value: bool):
         with self._speaking_lock:
+            _changed = (self._is_speaking != value)
             self._is_speaking = value
         if value:
             self.ui.set_state("SPEAKING")
         elif not self.ui.muted:
             self.ui.set_state("LISTENING")
+        # Audio ducking: bajar música mientras JARVIS habla, restaurar al callar.
+        # En hilo aparte — el mixer de Windows (COM) puede tardar ~50ms.
+        if _changed:
+            try:
+                from core.audio_ducking import duck, unduck, is_enabled
+                if is_enabled():
+                    threading.Thread(
+                        target=(duck if value else unduck), daemon=True
+                    ).start()
+            except Exception:
+                pass
 
     def speak(self, text: str):
         if not self._loop or not self.session:
@@ -3249,6 +3352,32 @@ class JarvisLive:
                 response={"result": "Apagando JARVIS. ¡Hasta luego, señor!"}
             )
 
+        if name == "self_update":
+            if self_update:
+                self.ui.write_log("🔄 Verificando actualizaciones...")
+                r = await loop.run_in_executor(
+                    _TOOL_EXECUTOR, lambda: self_update(parameters=args, player=self.ui)
+                )
+                result = r or "Sin respuesta del actualizador."
+            else:
+                result = "Módulo self_update no disponible."
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
+        if name == "doc_search":
+            if doc_search:
+                self.ui.write_log("📚 Buscando en tus documentos...")
+                r = await loop.run_in_executor(
+                    _TOOL_EXECUTOR, lambda: doc_search(parameters=args, player=self.ui)
+                )
+                result = r or "Sin resultados."
+            else:
+                result = "Módulo doc_search no disponible."
+            return types.FunctionResponse(
+                id=fc.id, name=name, response={"result": result}
+            )
+
         if name == "pair_programming":
             if pair_programming:
                 self.ui.write_log("🧑‍💻 Pair programming...")
@@ -3297,8 +3426,30 @@ class JarvisLive:
                     result = "No hay tareas en curso ni recientes, señor."
                 else:
                     lines = [f"- {t.title} [{t.status}] {int(t.duration_s())}s"
+                             + (f" — {t.progress}" if t.progress else "")
                              for t in tasks]
                     result = "Estado de tareas:\n" + "\n".join(lines)
+            elif action == "cancel":
+                try:
+                    from core.task_queue import cancel as _task_cancel
+                    target_title = (args.get("title") or "").lower().strip()
+                    running = _task_list(status="running", limit=10)
+                    victim = None
+                    if target_title:
+                        for t in running:
+                            if target_title in t.title.lower():
+                                victim = t; break
+                    elif running:
+                        victim = running[0]   # la más reciente en curso
+                    if victim is None:
+                        result = "No encontré ninguna tarea en curso para cancelar, señor."
+                    elif _task_cancel(victim.id):
+                        result = (f"Cancelando '{victim.title}'. La tarea se detendrá "
+                                  "al terminar el paso actual.")
+                    else:
+                        result = f"No se pudo cancelar '{victim.title}' (estado: {victim.status})."
+                except Exception as e:
+                    result = f"Error al cancelar: {e}"
             else:
                 result = _task_voice_summary()
             return types.FunctionResponse(
@@ -3761,9 +3912,28 @@ class JarvisLive:
 
             elif name == "terminal_agent":
                 if terminal_agent:
-                    self.ui.write_log("⚠️ Ejecutando en Terminal...")
-                    r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: terminal_agent(parameters=args, player=self.ui))
-                    result = r or "Comando ejecutado."
+                    # ── SANDBOX: clasificar riesgo ANTES de ejecutar ──────────
+                    _cmd = args.get("command", "")
+                    _confirmed = args.get("confirmed", False)
+                    if isinstance(_confirmed, str):
+                        _confirmed = _confirmed.lower() in ("true", "1", "yes", "sí", "si")
+                    _report = _sandbox_cmd(_cmd)
+                    if _report is not None and _report.needs_confirmation() and not _confirmed:
+                        _jlog_warn(f"Sandbox bloqueó comando {_report.risk}: {_cmd[:120]}",
+                                   category="tool")
+                        self.ui.write_log(f"🛡️ Sandbox: comando {_report.risk} requiere confirmación")
+                        result = (
+                            f"COMANDO BLOQUEADO POR SEGURIDAD (riesgo {_report.risk}: {_report.reason}).\n"
+                            f"Comando exacto: {_cmd}\n"
+                            "INSTRUCCIÓN: Lee al usuario EXACTAMENTE qué se va a ejecutar y qué hace. "
+                            "Si el usuario confirma verbalmente ('sí, confirmo', 'adelante', 'hazlo'), "
+                            "vuelve a llamar terminal_agent con el MISMO comando y confirmed=true. "
+                            "Si duda o se niega, NO lo ejecutes."
+                        )
+                    else:
+                        self.ui.write_log("⚠️ Ejecutando en Terminal...")
+                        r = await loop.run_in_executor(_TOOL_EXECUTOR, lambda: terminal_agent(parameters=args, player=self.ui))
+                        result = r or "Comando ejecutado."
                 else:
                     result = "Módulo terminal_agent no encontrado."
 
@@ -4081,20 +4251,34 @@ class JarvisLive:
                                     _sb_push(full_in, full_out)
                                 except Exception:
                                     pass
-                                # Detección de correcciones del usuario
+                                # Detección de correcciones del usuario — si aprende
+                                # una regla, inyectarla EN VIVO como contexto silencioso
                                 try:
-                                    from core.correction_learner import maybe_save_correction
-                                    _th.Thread(
-                                        target=maybe_save_correction,
-                                        args=(full_in, full_out),
-                                        daemon=True
-                                    ).start()
+                                    from core.correction_learner import maybe_save_correction, detect_correction
+                                    def _learn_and_notify(uin=full_in, uout=full_out):
+                                        if maybe_save_correction(uin, uout):
+                                            found = detect_correction(uin)
+                                            if found:
+                                                self._inject_context(
+                                                    f"(REGLA APRENDIDA del usuario, aplícala desde ahora: "
+                                                    f"{found[1]})"
+                                                )
+                                    _th.Thread(target=_learn_and_notify, daemon=True).start()
                                 except Exception:
                                     pass
-                                # Detección de estado emocional del usuario
+                                # Detección de estado emocional — inyectar hint EN VIVO
+                                # solo cuando el estado CAMBIA (no repetir cada turno)
                                 try:
                                     from core.emotion_detector import update_from_user_text
-                                    update_from_user_text(full_in)
+                                    _estate = update_from_user_text(full_in)
+                                    _prev_label = getattr(self, "_last_emotion_label", "neutral")
+                                    if (_estate.label != _prev_label
+                                            and _estate.label != "neutral"
+                                            and _estate.intensity >= 0.4):
+                                        hint = _estate.to_prompt_hint()
+                                        if hint:
+                                            self._inject_context(f"({hint})")
+                                    self._last_emotion_label = _estate.label
                                 except Exception:
                                     pass
                             in_buf  = []
@@ -4143,13 +4327,53 @@ class JarvisLive:
     async def _play_audio(self):
         print("[JARVIS] 🔊 Play iniciado")
 
-        stream = sd.RawOutputStream(
-            samplerate=RECEIVE_SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            blocksize=PLAY_CHUNK_SIZE,
-        )
-        stream.start()
+        def _open_stream():
+            s = sd.RawOutputStream(
+                samplerate=RECEIVE_SAMPLE_RATE,
+                channels=CHANNELS,
+                dtype="int16",
+                blocksize=PLAY_CHUNK_SIZE,
+            )
+            s.start()
+            return s
+
+        stream = None
+        try:
+            stream = _open_stream()
+        except Exception as e:
+            print(f"[JARVIS] ⚠️ Salida de audio no disponible al iniciar: {e}")
+            _jlog_error("Audio out no abrió al iniciar", exc=e, category="audio")
+
+        _write_fails = 0
+
+        async def _write(data: bytes) -> None:
+            """Escribir al stream con auto-recuperación.
+            Un fallo del driver (PaErrorCode -9999, device removed, etc.)
+            NO debe tirar la sesión completa — reabrimos el stream o, si
+            es imposible, seguimos drenando la cola sin reproducir."""
+            nonlocal stream, _write_fails
+            if stream is None:
+                try:
+                    stream = await asyncio.to_thread(_open_stream)
+                    print("[JARVIS] 🔊 Salida de audio recuperada")
+                    _write_fails = 0
+                except Exception:
+                    return   # sin audio por ahora — no bloquear
+            try:
+                await asyncio.to_thread(stream.write, data)
+                _write_fails = 0
+            except Exception as we:
+                _write_fails += 1
+                print(f"[JARVIS] ⚠️ Audio out error ({_write_fails}): {we}")
+                _jlog_error("Audio out write falló", exc=we, category="audio")
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                stream = None
+                if _write_fails == 5:
+                    print("[JARVIS] ❌ Altavoz no disponible — continúo SIN voz "
+                          "(las transcripciones siguen en pantalla; revisa el driver)")
 
         # Jitter buffer: accumulate a few chunks before playback to prevent underruns
         _jitter_buf: list[bytes] = []
@@ -4173,13 +4397,13 @@ class JarvisLive:
                     ):
                         # Drain remaining jitter buffer before stopping
                         for buffered in _jitter_buf:
-                            await asyncio.to_thread(stream.write, buffered)
+                            await _write(buffered)
                         _jitter_buf.clear()
-                        
+
                         # Wait 300ms to allow OS audio buffer to play out and room echo to decay
                         # before re-enabling the microphone (prevents Jarvis hearing itself and cutting off)
                         await asyncio.sleep(0.3)
-                        
+
                         self.set_speaking(False)
                         self._turn_done_event.clear()
                     continue
@@ -4190,15 +4414,15 @@ class JarvisLive:
                 # Once we have enough chunks buffered, drain them to the output stream
                 if len(_jitter_buf) >= _JITTER_TARGET:
                     for buffered in _jitter_buf:
-                        await asyncio.to_thread(stream.write, buffered)
+                        await _write(buffered)
                     _jitter_buf.clear()
-        except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
-            raise
         finally:
             self.set_speaking(False)
-            stream.stop()
-            stream.close()
+            if stream is not None:
+                try:
+                    stream.stop(); stream.close()
+                except Exception:
+                    pass
 
     async def run(self):
         client = genai.Client(

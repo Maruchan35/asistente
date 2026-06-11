@@ -1,464 +1,443 @@
+"""
+core/telegram_bot.py — Control remoto de JARVIS vía Telegram.
+
+SIN dependencia de python-telegram-bot: usa la API HTTP de Telegram
+directamente con `requests` (long polling getUpdates). Esto elimina el
+error "No module named 'telegram'" del arranque.
+
+Funciones desde el teléfono:
+  • Conversación con DeepSeek/Groq con memoria
+  • Capturas de pantalla del PC
+  • Abrir apps, controlar multimedia, escribir texto
+  • Buscar archivos y enviarlos por WhatsApp
+  • Estado de tareas en curso ("¿en qué vas?")
+  • Lanzar investigaciones (deep_research) remotamente
+"""
 import sys
 import json
 import threading
-import asyncio
-import requests
 import time
 from pathlib import Path
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import requests
 
-import socket
-_old_getaddrinfo = socket.getaddrinfo
-def _new_getaddrinfo(*args, **kwargs):
-    if len(args) > 0 and isinstance(args[0], str) and "telegram.org" in args[0]:
-        kwargs['family'] = socket.AF_INET
-    return _old_getaddrinfo(*args, **kwargs)
-socket.getaddrinfo = _new_getaddrinfo
 
 def get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
     return Path(__file__).resolve().parent.parent
 
+
 BASE_DIR = get_base_dir()
 API_CONFIG_PATH = BASE_DIR / "config" / "api_keys.json"
+
 
 def get_config():
     if not API_CONFIG_PATH.exists():
         return {}
     try:
         return json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
-    except:
+    except Exception:
         return {}
 
+
 chat_histories = {}
+_stop_event = threading.Event()
 
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cfg = get_config()
-    chat_id = cfg.get("telegram_chat_id", "")
-    
-    if str(update.effective_chat.id) != str(chat_id):
-        print(f"[Telegram] Acceso denegado a ID: {update.effective_chat.id}")
-        return
-        
-    chat_histories[str(chat_id)] = []
-    await update.message.reply_text("Hola señor. Sus sistemas en línea con motor DeepSeek. ¿En qué puedo ayudarle?")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cfg = get_config()
-    chat_id = str(cfg.get("telegram_chat_id", ""))
-    
-    if str(update.effective_chat.id) != chat_id:
-        print(f"[Telegram] Intento de acceso denegado. ID no autorizado: {update.effective_chat.id}")
-        return
-        
-    user_text = update.message.text
-    if not user_text:
-        return
-        
-    tel_ai = cfg.get("telegram_ai_provider", "deepseek")
-    
-    if tel_ai == "groq":
-        api_key = cfg.get("groq_api_key", "")
-        if not api_key:
-            await update.message.reply_text("Advertencia: Groq API Key no configurada en los ajustes de JARVIS.")
-            return
-        motor_name = "Groq"
-    else:
-        api_key = cfg.get("deepseek_api_key", "")
-        if not api_key:
-            await update.message.reply_text("Advertencia: DeepSeek API Key no configurada en los ajustes de JARVIS.")
-            return
-        motor_name = "DeepSeek"
-        
-    from memory.memory_manager import load_memory, format_memory_for_prompt
-    mem = load_memory()
-    mem_prompt = format_memory_for_prompt(mem)
-    
+# ══════════════════════════════════════════════════════════════════════════════
+#  CLIENTE TELEGRAM HTTP (sin dependencias)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TelegramAPI:
+    def __init__(self, token: str):
+        self.base = f"https://api.telegram.org/bot{token}"
+        self._offset = 0
+
+    def get_updates(self, timeout: int = 50) -> list[dict]:
+        try:
+            r = requests.get(
+                f"{self.base}/getUpdates",
+                params={"offset": self._offset, "timeout": timeout,
+                        "allowed_updates": json.dumps(["message"])},
+                timeout=timeout + 10,
+            )
+            data = r.json()
+            updates = data.get("result", [])
+            if updates:
+                self._offset = updates[-1]["update_id"] + 1
+            return updates
+        except requests.exceptions.Timeout:
+            return []
+        except Exception as e:
+            print(f"[Telegram] getUpdates error: {e}")
+            time.sleep(5)
+            return []
+
+    def send_message(self, chat_id, text: str):
+        # Telegram limita 4096 chars por mensaje
+        for chunk_start in range(0, len(text), 4000):
+            chunk = text[chunk_start:chunk_start + 4000]
+            try:
+                requests.post(f"{self.base}/sendMessage",
+                              json={"chat_id": chat_id, "text": chunk}, timeout=30)
+            except Exception as e:
+                print(f"[Telegram] sendMessage error: {e}")
+
+    def send_photo(self, chat_id, photo_path: str):
+        try:
+            with open(photo_path, "rb") as f:
+                requests.post(f"{self.base}/sendPhoto",
+                              data={"chat_id": chat_id},
+                              files={"photo": f}, timeout=60)
+            return True
+        except Exception as e:
+            print(f"[Telegram] sendPhoto error: {e}")
+            return False
+
+    def send_document(self, chat_id, file_path: str):
+        try:
+            with open(file_path, "rb") as f:
+                requests.post(f"{self.base}/sendDocument",
+                              data={"chat_id": chat_id},
+                              files={"document": f}, timeout=120)
+            return True
+        except Exception as e:
+            print(f"[Telegram] sendDocument error: {e}")
+            return False
+
+    def send_typing(self, chat_id):
+        try:
+            requests.post(f"{self.base}/sendChatAction",
+                          json={"chat_id": chat_id, "action": "typing"}, timeout=10)
+        except Exception:
+            pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HERRAMIENTAS DISPONIBLES DESDE TELEGRAM
+# ══════════════════════════════════════════════════════════════════════════════
+
+TOOLS = [
+    {"type": "function", "function": {
+        "name": "telegram_send_file_whatsapp",
+        "description": "Busca un archivo en el PC y lo envía por WhatsApp a un contacto.",
+        "parameters": {"type": "object", "properties": {
+            "filename": {"type": "string"}, "contact": {"type": "string"}},
+            "required": ["filename", "contact"]}}},
+    {"type": "function", "function": {
+        "name": "take_screenshot",
+        "description": "Toma una captura de la pantalla del PC. Parámetro screen: '1', '2' o 'combined'.",
+        "parameters": {"type": "object", "properties": {
+            "screen": {"type": "string"}}, "required": ["screen"]}}},
+    {"type": "function", "function": {
+        "name": "media_control",
+        "description": "Controla multimedia del PC: play_pause, next_track, prev_track, mute, volume_up, volume_down.",
+        "parameters": {"type": "object", "properties": {
+            "sub_action": {"type": "string"}}, "required": ["sub_action"]}}},
+    {"type": "function", "function": {
+        "name": "search_files",
+        "description": "Busca archivos en el PC. path: 'home/Desktop', 'home/Documents', 'home/Downloads' o ruta absoluta.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "name": {"type": "string"},
+            "extension": {"type": "string"}}, "required": ["path", "name"]}}},
+    {"type": "function", "function": {
+        "name": "open_app",
+        "description": "Abre cualquier aplicación o programa en el PC.",
+        "parameters": {"type": "object", "properties": {
+            "app_name": {"type": "string"}}, "required": ["app_name"]}}},
+    {"type": "function", "function": {
+        "name": "window_control",
+        "description": "Maximiza/minimiza/cierra ventanas. sub_action: maximize|minimize|close|close_tab|move_monitor.",
+        "parameters": {"type": "object", "properties": {
+            "sub_action": {"type": "string"}, "target": {"type": "string"},
+            "monitor": {"type": "string"}}, "required": ["sub_action", "target"]}}},
+    {"type": "function", "function": {
+        "name": "type_text",
+        "description": "Escribe texto físicamente en el PC con el teclado.",
+        "parameters": {"type": "object", "properties": {
+            "text": {"type": "string"}}, "required": ["text"]}}},
+    {"type": "function", "function": {
+        "name": "check_time",
+        "description": "Obtiene fecha y hora actual del PC.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "task_status",
+        "description": "Estado de las tareas en segundo plano de JARVIS (investigaciones, etc). Usar cuando pregunten '¿en qué vas?' o '¿cómo va X?'.",
+        "parameters": {"type": "object", "properties": {}, "required": []}}},
+    {"type": "function", "function": {
+        "name": "deep_research",
+        "description": "Lanza una investigación larga en el PC que genera un documento Word profesional. Corre en segundo plano.",
+        "parameters": {"type": "object", "properties": {
+            "topic": {"type": "string"},
+            "target_pages": {"type": "integer"}},
+            "required": ["topic"]}}},
+    {"type": "function", "function": {
+        "name": "send_file_to_telegram",
+        "description": "Envía un archivo del PC directamente a este chat de Telegram. Útil tras buscar un archivo o terminar una investigación.",
+        "parameters": {"type": "object", "properties": {
+            "file_path": {"type": "string", "description": "Ruta absoluta del archivo"}},
+            "required": ["file_path"]}}},
+]
+
+
+def _execute_tool(func_name: str, args: dict, api: TelegramAPI, chat_id) -> str:
+    """Ejecutar una herramienta llamada desde Telegram."""
+    try:
+        if func_name == "telegram_send_file_whatsapp":
+            from actions.file_controller import file_controller
+            from actions.whatsapp import whatsapp
+            f_res = file_controller({"action": "find", "filename": args.get("filename", ""),
+                                     "copy_to_clipboard": True})
+            if "No se encontró" in f_res or "falló" in f_res:
+                return f_res
+            w_res = whatsapp({"action": "send", "receiver": args.get("contact", ""),
+                              "paste_clipboard": True})
+            return f"Archivo encontrado y proceso completado: {w_res}"
+
+        if func_name == "take_screenshot":
+            from actions.computer_control import computer_control
+            res = computer_control({"action": "take_screenshot",
+                                    "screen": args.get("screen", "combined")})
+            if "SCREENSHOT_SAVED:" in res:
+                path = res.split("SCREENSHOT_SAVED:")[1].strip()
+                if api.send_photo(chat_id, path):
+                    return "Captura tomada y enviada al chat."
+                return "Captura tomada pero falló el envío a Telegram."
+            return res
+
+        if func_name == "media_control":
+            from actions.computer_control import computer_control
+            return computer_control({"action": "media_control",
+                                     "sub_action": args.get("sub_action", "")})
+
+        if func_name == "search_files":
+            from actions.file_controller import file_controller
+            return file_controller({"action": "find", "path": args.get("path", ""),
+                                    "name": args.get("name", ""),
+                                    "extension": args.get("extension", "")})
+
+        if func_name == "open_app":
+            from actions.open_app import open_app
+            return open_app({"app_name": args.get("app_name", "")})
+
+        if func_name == "window_control":
+            from actions.computer_control import computer_control
+            return computer_control({"action": "window_control",
+                                     "sub_action": args.get("sub_action", ""),
+                                     "target": args.get("target", ""),
+                                     "monitor": args.get("monitor", "1")})
+
+        if func_name == "type_text":
+            import pyautogui
+            text = args.get("text", "")
+            if not text:
+                return "Error: sin texto."
+            pyautogui.write(text, interval=0.01)
+            return f"Texto escrito: '{text}'"
+
+        if func_name == "check_time":
+            import datetime
+            return datetime.datetime.now().strftime("%A, %d %B %Y - %I:%M:%S %p")
+
+        if func_name == "task_status":
+            try:
+                from core.task_queue import summary_for_voice, list_tasks
+                lines = [summary_for_voice()]
+                for t in list_tasks(limit=5):
+                    prog = f" — {t.progress}" if t.progress else ""
+                    lines.append(f"• {t.title} [{t.status}]{prog}")
+                return "\n".join(lines)
+            except Exception as e:
+                return f"Error consultando tareas: {e}"
+
+        if func_name == "deep_research":
+            try:
+                from actions.deep_research import deep_research
+                return deep_research({
+                    "topic": args.get("topic", ""),
+                    "target_pages": args.get("target_pages", 15),
+                    "background": True,
+                })
+            except Exception as e:
+                return f"Error lanzando investigación: {e}"
+
+        if func_name == "send_file_to_telegram":
+            fp = args.get("file_path", "")
+            if not fp or not Path(fp).exists():
+                return f"Archivo no encontrado: {fp}"
+            if api.send_document(chat_id, fp):
+                return "Archivo enviado al chat."
+            return "Falló el envío del archivo."
+
+        return "Función no encontrada."
+    except Exception as e:
+        return f"Error ejecutando {func_name}: {e}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONVERSACIÓN (DeepSeek / Groq con tool-calling)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_system_instruction(motor_name: str) -> str:
     from datetime import datetime
     now_str = datetime.now().strftime("%A, %d %B %Y - %I:%M:%S %p")
-    
-    import ctypes
-    screen_count = ctypes.windll.user32.GetSystemMetrics(80)
-    if screen_count > 1:
-        screen_rule = (
-            "REGLA DE CAPTURAS: El usuario tiene múltiples pantallas. Si pide una captura, NO la tomes de inmediato. "
-            "Pregúntale primero: '¿Desea la pantalla 1, la pantalla 2 o combinada?'. Solo cuando el usuario te "
-            "responda especificando, ejecuta la herramienta take_screenshot.\n\n"
-        )
-    else:
-        screen_rule = (
-            "REGLA DE CAPTURAS: El usuario tiene 1 sola pantalla. Cuando pida una captura, ejecuta la herramienta "
-            "take_screenshot de inmediato (screen='combined'). NO le preguntes nada sobre qué pantalla elegir.\n\n"
-        )
-    
-    system_instruction = (
-        "Eres JARVIS, el asistente de inteligencia artificial de Tony Stark. "
-        "Estás respondiendo directamente a través de un chat seguro de Telegram al usuario. "
-        f"Usa modelo {motor_name}. Proporciona respuestas concisas, naturales y serviciales.\n\n"
-        f"[IMPORTANTE - HORA ACTUAL]: El sistema indica que en este preciso momento es: {now_str}. Usa esta hora para cualquier pregunta relacionada.\n\n"
-        f"{screen_rule}"
-        f"{mem_prompt}"
+    mem_prompt = ""
+    try:
+        from memory.memory_manager import load_memory, format_memory_for_prompt
+        mem_prompt = format_memory_for_prompt(load_memory())
+    except Exception:
+        pass
+
+    screen_rule = ""
+    try:
+        import ctypes
+        if ctypes.windll.user32.GetSystemMetrics(80) > 1:
+            screen_rule = ("REGLA DE CAPTURAS: hay múltiples pantallas — pregunta "
+                           "'¿pantalla 1, 2 o combinada?' antes de capturar.\n\n")
+        else:
+            screen_rule = ("REGLA DE CAPTURAS: 1 sola pantalla — captura de inmediato "
+                           "con screen='combined' sin preguntar.\n\n")
+    except Exception:
+        pass
+
+    return (
+        "Eres JARVIS, asistente de IA del usuario, respondiendo por Telegram desde su PC. "
+        f"Motor: {motor_name}. Respuestas concisas y serviciales en español.\n\n"
+        f"[HORA ACTUAL]: {now_str}\n\n"
+        f"{screen_rule}{mem_prompt}"
     )
-    
-    if chat_id not in chat_histories or not chat_histories[chat_id]:
-        chat_histories[chat_id] = [{"role": "system", "content": system_instruction}]
+
+
+def _call_ai(messages: list, tel_ai: str, api_key: str) -> dict:
+    if tel_ai == "groq":
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        model = "llama3-70b-8192"
     else:
-        # Siempre actualizar la instrucción de sistema con la hora más reciente
-        if chat_histories[chat_id] and chat_histories[chat_id][0].get("role") == "system":
-            chat_histories[chat_id][0]["content"] = system_instruction
-        
-    # Appending user message
-    chat_histories[chat_id].append({"role": "user", "content": user_text})
-    
-    if len(chat_histories[chat_id]) > 20:
-        history = chat_histories[chat_id]
+        url = "https://api.deepseek.com/chat/completions"
+        model = "deepseek-chat"
+    resp = requests.post(
+        url,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        json={"model": model, "messages": messages, "tools": TOOLS, "max_tokens": 1000},
+        timeout=90,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _handle_text(api: TelegramAPI, chat_id, user_text: str):
+    cfg = get_config()
+    tel_ai = cfg.get("telegram_ai_provider", "deepseek")
+    api_key = cfg.get("groq_api_key" if tel_ai == "groq" else "deepseek_api_key", "")
+    motor_name = "Groq" if tel_ai == "groq" else "DeepSeek"
+
+    if not api_key:
+        api.send_message(chat_id, f"Advertencia: {motor_name} API Key no configurada en JARVIS.")
+        return
+
+    cid = str(chat_id)
+    system_instruction = _build_system_instruction(motor_name)
+    if cid not in chat_histories or not chat_histories[cid]:
+        chat_histories[cid] = [{"role": "system", "content": system_instruction}]
+    else:
+        chat_histories[cid][0]["content"] = system_instruction
+
+    chat_histories[cid].append({"role": "user", "content": user_text})
+
+    # Trim del historial — sin cortar tool_call/respuesta a la mitad
+    if len(chat_histories[cid]) > 20:
+        history = chat_histories[cid]
         cut_index = -15
-        # Evitar cortar el historial en medio de un tool_call y su respuesta (causa Error 400)
         while cut_index < -1 and history[cut_index].get("role") != "user":
             cut_index += 1
-        chat_histories[chat_id] = [history[0]] + history[cut_index:]
-        
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "telegram_send_file_whatsapp",
-                "description": "Busca un archivo en el PC y lo envía por WhatsApp a un contacto.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "filename": {"type": "string"},
-                        "contact": {"type": "string"}
-                    },
-                    "required": ["filename", "contact"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "take_screenshot",
-                "description": "Toma una captura de la pantalla física del PC. REQUIERE que le pases el parámetro 'screen' como '1', '2' o 'combined'.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "screen": {"type": "string", "description": "Debe ser '1', '2' o 'combined'"}
-                    },
-                    "required": ["screen"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "media_control",
-                "description": "Controla la reproducción multimedia del sistema (Spotify, YouTube, etc) usando teclas nativas, incluso si la app está en segundo plano.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "sub_action": {"type": "string", "description": "Debe ser: 'play_pause', 'next_track', 'prev_track', 'mute', 'volume_up', 'volume_down'"}
-                    },
-                    "required": ["sub_action"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_files",
-                "description": "Busca archivos o carpetas en el disco duro local de la PC en una ruta específica y devuelve una lista numerada de resultados con sus rutas exactas.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Ruta donde buscar, ej: 'home/Desktop', 'home/Documents', 'home/Downloads', o 'C:\\\\'"},
-                        "name": {"type": "string", "description": "Parte del nombre del archivo o carpeta a buscar."},
-                        "extension": {"type": "string", "description": "Extensión opcional (ej: '.pdf', '.xlsx')."}
-                    },
-                    "required": ["path", "name"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "video_seek",
-                "description": "Adelanta o retrocede un video en YouTube o cualquier reproductor web enviando pulsaciones rápidas de teclas direccionales.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "seconds": {"type": "string", "description": "Cantidad de segundos a adelantar (positivo) o retroceder (negativo). Ejemplo: '10 segundos', '-5 segundos'"}
-                    },
-                    "required": ["seconds"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "open_app",
-                "description": "Abre cualquier aplicación, programa o carpeta en la computadora (ej. Word, Excel, Chrome, Explorador de Archivos, Spotify).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "app_name": {"type": "string", "description": "Nombre exacto de la aplicación o programa a abrir (ej. 'Word', 'Chrome', 'explorer')"}
-                    },
-                    "required": ["app_name"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "type_text",
-                "description": "Escribe texto físicamente en la computadora usando el teclado (pyautogui).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "text": {"type": "string", "description": "El texto exacto que debes escribir."}
-                    },
-                    "required": ["text"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "window_control",
-                "description": "Maximiza, minimiza, cierra o mueve ventanas en la PC del usuario (ej: opera, chrome). También puede cerrar pestañas (close_tab).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "sub_action": {"type": "string", "description": "maximize | minimize | close | close_tab | move_monitor"},
-                        "target": {"type": "string", "description": "Nombre de la app (ej: opera)"},
-                        "monitor": {"type": "string", "description": "Número de monitor (1 o 2) solo para move_monitor"}
-                    },
-                    "required": ["sub_action", "target"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "app_macro",
-                "description": "Automatiza clics paso a paso en programas (ej. cambiar fuente/tamaño en Word).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "app": {"type": "string", "description": "Nombre de la aplicación (ej: Word)"},
-                        "action": {"type": "string", "description": "Macro a ejecutar: change_font"},
-                        "font_name": {"type": "string", "description": "Nombre de la fuente (ej: Arial)"},
-                        "font_size": {"type": "string", "description": "Tamaño de la fuente (ej: 11)"}
-                    },
-                    "required": ["app", "action"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "check_time",
-                "description": "Obtiene la fecha y hora exacta actual. Úsalo siempre que el usuario pregunte la hora.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        }
-    ]
+        chat_histories[cid] = [history[0]] + history[cut_index:]
+
+    api.send_typing(chat_id)
 
     try:
-        status_msg = await update.message.reply_text("⏳ Conectando con DeepSeek...")
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action='typing')
-        
-        loop = asyncio.get_running_loop()
-        def _call_ai(messages):
-            if tel_ai == "groq":
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-                payload = {
-                    "model": "llama3-70b-8192", 
-                    "messages": messages,
-                    "tools": tools,
-                    "max_tokens": 1000
-                }
-            else:
-                url = "https://api.deepseek.com/chat/completions"
-                headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-                payload = {
-                    "model": "deepseek-chat", # deepseek-chat supports tools, reasoner doesn't
-                    "messages": messages,
-                    "tools": tools,
-                    "max_tokens": 1000
-                }
-            resp = requests.post(url, headers=headers, json=payload, timeout=90)
-            try:
-                resp.raise_for_status()
-            except requests.exceptions.HTTPError as e:
-                print(f"[DeepSeek/Groq ERROR] Status: {resp.status_code}")
-                print(f"[DeepSeek/Groq ERROR] Response: {resp.text}")
-                raise e
-            return resp.json()
-            
-        for _ in range(4): # Loop for tool chains
-            response_data = await loop.run_in_executor(None, _call_ai, chat_histories[chat_id])
+        for _ in range(4):   # cadena de hasta 4 tools
+            response_data = _call_ai(chat_histories[cid], tel_ai, api_key)
             message_obj = response_data.get("choices", [{}])[0].get("message", {})
-            
-            # Prevenir Error 400 Bad Request: Limpiar campos extra del asistente
-            clean_msg = {"role": message_obj.get("role", "assistant")}
-            
-            if message_obj.get("content") is not None:
-                clean_msg["content"] = message_obj.get("content")
-            else:
-                clean_msg["content"] = ""
-                
+
+            clean_msg = {"role": message_obj.get("role", "assistant"),
+                         "content": message_obj.get("content") or ""}
             if message_obj.get("tool_calls"):
                 clean_msg["tool_calls"] = message_obj["tool_calls"]
-                
-            chat_histories[chat_id].append(clean_msg)
-            
+            chat_histories[cid].append(clean_msg)
+
             if message_obj.get("tool_calls"):
                 for tool_call in message_obj["tool_calls"]:
                     func_name = tool_call.get("function", {}).get("name")
                     try:
                         args = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
-                    except:
+                    except Exception:
                         args = {}
-                        
-                    tool_result = ""
-                    
-                    if func_name == "telegram_send_file_whatsapp":
-                        from actions.file_controller import file_controller
-                        from actions.whatsapp import whatsapp
-                        f_res = file_controller({"action": "find", "filename": args.get("filename", ""), "copy_to_clipboard": True})
-                        if "No se encontró" in f_res or "falló" in f_res:
-                            tool_result = f_res
-                        else:
-                            w_res = whatsapp({"action": "send", "receiver": args.get("contact", ""), "paste_clipboard": True})
-                            tool_result = f"Archivo encontrado y proceso completado: {w_res}"
-                            
-                    elif func_name == "take_screenshot":
-                        from actions.computer_control import computer_control
-                        res = computer_control({"action": "take_screenshot", "screen": args.get("screen", "combined")})
-                        if "SCREENSHOT_SAVED:" in res:
-                            path = res.split("SCREENSHOT_SAVED:")[1]
-                            try:
-                                with open(path, 'rb') as f:
-                                    await context.bot.send_photo(chat_id=update.effective_chat.id, photo=f)
-                                tool_result = "La captura ha sido tomada y enviada con éxito al chat de Telegram."
-                            except Exception as e:
-                                tool_result = f"Error subiendo la foto a Telegram: {e}"
-                        else:
-                            tool_result = res
-                            
-                    elif func_name == "window_control":
-                        from actions.computer_control import computer_control
-                        tool_result = computer_control({
-                            "action": "window_control", 
-                            "sub_action": args.get("sub_action", ""), 
-                            "target": args.get("target", ""),
-                            "monitor": args.get("monitor", "1")
-                        })
-                    elif func_name == "open_app":
-                        from actions.open_app import open_app
-                        tool_result = open_app({"app_name": args.get("app_name", "")})
-                    elif func_name == "type_text":
-                        import pyautogui
-                        text_to_type = args.get("text", "")
-                        if text_to_type:
-                            pyautogui.write(text_to_type, interval=0.01)
-                            tool_result = f"Texto escrito con éxito: '{text_to_type}'"
-                        else:
-                            tool_result = "Error: No se proporcionó texto para escribir."
-                    elif func_name == "media_control":
-                        from actions.computer_control import computer_control
-                        tool_result = computer_control({
-                            "action": "media_control",
-                            "sub_action": args.get("sub_action", "")
-                        })
-                    elif func_name == "video_seek":
-                        from actions.computer_control import computer_control
-                        tool_result = computer_control({
-                            "action": "seek",
-                            "sub_action": "seek",
-                            "seconds": str(args.get("seconds", "10"))
-                        })
-                    elif func_name == "search_files":
-                        from actions.file_controller import file_controller
-                        tool_result = file_controller({
-                            "action": "find",
-                            "path": args.get("path", ""),
-                            "name": args.get("name", ""),
-                            "extension": args.get("extension", "")
-                        })
-                    elif func_name == "app_macro":
-                        from actions.app_macro import app_macro
-                        tool_result = app_macro({
-                            "app": args.get("app", ""),
-                            "action": args.get("action", ""),
-                            "font_name": args.get("font_name", ""),
-                            "font_size": args.get("font_size", "")
-                        })
-                    elif func_name == "check_time":
-                        import datetime
-                        now = datetime.datetime.now()
-                        tool_result = f"La hora y fecha exacta del sistema es: {now.strftime('%A, %d %B %Y - %I:%M:%S %p')}"
-                    else:
-                        tool_result = "Función no encontrada."
-                        
-                    chat_histories[chat_id].append({
+                    api.send_typing(chat_id)
+                    tool_result = _execute_tool(func_name, args, api, chat_id)
+                    chat_histories[cid].append({
                         "role": "tool",
                         "tool_call_id": tool_call["id"],
-                        "content": str(tool_result)
+                        "content": str(tool_result),
                     })
             else:
-                reply_text = message_obj.get("content", "")
-                if reply_text:
-                    try:
-                        await status_msg.delete()
-                    except: pass
-                    await update.message.reply_text(reply_text)
+                reply = message_obj.get("content", "")
+                if reply:
+                    api.send_message(chat_id, reply)
                 break
-                
     except Exception as e:
-        try: await status_msg.delete()
-        except: pass
-        await update.message.reply_text(f"Se ha producido un error interno con DeepSeek: {e}")
+        api.send_message(chat_id, f"Error interno: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LOOP PRINCIPAL
+# ══════════════════════════════════════════════════════════════════════════════
 
 def run_telegram_bot():
     cfg = get_config()
-    token = cfg.get("telegram_bot_token", "")
-    chat_id = cfg.get("telegram_chat_id", "")
-    
-    if not token or not chat_id:
-        print("[Telegram] Bot token o Chat ID faltantes. El servicio se mantendrá inactivo.")
+    token = cfg.get("telegram_bot_token", "").strip()
+    chat_id_cfg = str(cfg.get("telegram_chat_id", "")).strip()
+
+    if not token or not chat_id_cfg:
+        print("[Telegram] Token o Chat ID no configurados — servicio remoto inactivo (opcional).")
         return
-        
-    print(f"[Telegram] Iniciando bot (DeepSeek Powered) para el chat {chat_id}...")
-    try:
-        app = (
-            ApplicationBuilder()
-            .token(token)
-            .connect_timeout(30.0)
-            .read_timeout(30.0)
-            .get_updates_connect_timeout(30.0)
-            .get_updates_read_timeout(60.0)
-            .build()
-        )
-        
-        app.add_handler(CommandHandler("start", start_cmd))
-        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        app.run_polling(close_loop=False)
-    except Exception as e:
-        print(f"[Telegram] Error crítico al iniciar el bot: {e}")
+
+    print(f"[Telegram] Bot remoto activo para chat {chat_id_cfg}.")
+    api = TelegramAPI(token)
+
+    while not _stop_event.is_set():
+        updates = api.get_updates(timeout=50)
+        for upd in updates:
+            msg = upd.get("message") or {}
+            from_chat = str((msg.get("chat") or {}).get("id", ""))
+            if from_chat != chat_id_cfg:
+                if from_chat:
+                    print(f"[Telegram] Acceso denegado a chat ID: {from_chat}")
+                continue
+            text = (msg.get("text") or "").strip()
+            if not text:
+                continue
+            if text == "/start":
+                chat_histories[from_chat] = []
+                api.send_message(from_chat,
+                                 "Hola señor. Sistemas en línea. ¿En qué puedo ayudarle?")
+                continue
+            # Procesar en hilo para no bloquear el polling
+            threading.Thread(
+                target=_handle_text, args=(api, from_chat, text), daemon=True
+            ).start()
+
 
 def start_telegram_listener():
+    """Arrancar el listener en background — seguro de llamar siempre.
+    Si no hay token configurado, simplemente queda inactivo."""
+    cfg = get_config()
+    if not cfg.get("telegram_bot_token", "").strip():
+        # No imprimir error — es una función opcional
+        return
     t = threading.Thread(target=run_telegram_bot, daemon=True, name="TelegramListener")
     t.start()
+
+
+def stop_telegram_listener():
+    _stop_event.set()

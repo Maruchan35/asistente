@@ -219,12 +219,43 @@ def _generate_outline(topic: str, target_pages: int,
     ]
 
 
+# ── Contexto web real por sección ─────────────────────────────────────────────
+
+def _gather_web_context(topic: str, section_title: str,
+                        max_results: int = 4) -> tuple[str, list[dict]]:
+    """
+    Busca en la web datos reales para fundamentar una sección.
+    Devuelve (texto_contexto, [{title, url, snippet}, ...]).
+    Fail-safe: si no hay internet o falla el parser, devuelve ("", []).
+    """
+    try:
+        from actions.web_search import _ddg_lite_structured
+        query = f"{topic} {section_title}"
+        results = _ddg_lite_structured(query, max_results=max_results)
+        if not results:
+            return "", []
+        lines = []
+        for i, r in enumerate(results, 1):
+            line = f"[Fuente {i}] {r['title']}"
+            if r.get("snippet"):
+                line += f": {r['snippet'][:250]}"
+            if r.get("url"):
+                line += f" ({r['url']})"
+            lines.append(line)
+        return "\n".join(lines), results
+    except Exception:
+        return "", []
+
+
 # ── Generador de contenido por sección ────────────────────────────────────────
 
 def _generate_section(topic: str, section_title: str, section_desc: str,
                       all_titles: list[str], style_hint: str,
-                      words_target: int = _WORDS_PER_SECTION) -> str:
-    """Genera contenido extenso de UNA sección. Devuelve markdown."""
+                      words_target: int = _WORDS_PER_SECTION,
+                      web_context: str = "") -> str:
+    """Genera contenido extenso de UNA sección. Devuelve markdown.
+    Si `web_context` viene con hallazgos de la web, el LLM los usa para
+    fundamentar datos reales en lugar de solo su conocimiento interno."""
     system = (
         "Eres un investigador académico que escribe en español. "
         "Produces texto profundo, riguroso, con ejemplos concretos, datos "
@@ -244,6 +275,14 @@ def _generate_section(topic: str, section_title: str, section_desc: str,
     )
     if section_desc:
         user += f"Esta sección debe cubrir: {section_desc}\n"
+
+    if web_context:
+        user += (
+            "\nDATOS DE FUENTES WEB ACTUALES — apóyate en ellos cuando aporten "
+            "datos concretos (cifras, fechas, casos), integrándolos de forma natural "
+            "en el texto. NO copies los snippets literalmente, redacta con tus palabras:\n"
+            f"{web_context}\n"
+        )
 
     user += (
         f"\nObjetivo: ~{words_target} palabras de contenido sustantivo "
@@ -271,27 +310,52 @@ def _generate_section(topic: str, section_title: str, section_desc: str,
     return content
 
 
-# ── Generador de referencias plausibles ───────────────────────────────────────
+# ── Generador de referencias ──────────────────────────────────────────────────
 
-def _generate_references(topic: str, n: int = 8) -> str:
-    """Genera referencias bibliográficas plausibles (NO inventa nada que no exista)."""
-    system = (
-        "Eres bibliotecario académico. Generas referencias en formato APA 7 "
-        "de fuentes REALES y RECONOCIDAS sobre el tema dado. "
-        "Usa autores conocidos, editoriales reales, revistas con factor de impacto. "
-        "Si dudas de una referencia exacta, prefiere obras canónicas del campo."
-    )
-    user = (
-        f"Tema: {topic}\n\n"
-        f"Genera {n} referencias en formato APA 7 sobre este tema. "
-        "Devuelve UNA referencia por línea, sin numerar, sin comentarios.\n\n"
-        "Formato:\n"
-        "Apellido, N. (AÑO). *Título del libro o artículo*. Editorial o Revista, vol(núm), pp-pp."
-    )
-    try:
-        return _llm_call(user, max_tokens=1000, system=system).strip()
-    except Exception:
-        return ""
+def _generate_references(topic: str, n: int = 8,
+                         real_sources: list[dict] | None = None) -> str:
+    """Genera la lista de referencias. Prioriza las fuentes web REALES
+    recopiladas durante la investigación; completa con obras canónicas del LLM."""
+    real_lines: list[str] = []
+    if real_sources:
+        from datetime import datetime as _dt
+        year = _dt.now().year
+        seen_urls: set[str] = set()
+        for s in real_sources:
+            url = (s.get("url") or "").strip()
+            title = (s.get("title") or "").strip()
+            if not url or not title or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            # Formato APA 7 para página web: Título. (Año). Recuperado de URL
+            real_lines.append(f"{title}. ({year}). Recuperado de {url}")
+        real_lines = real_lines[:max(4, n // 2)]
+
+    remaining = max(0, n - len(real_lines))
+    llm_refs = ""
+    if remaining > 0:
+        system = (
+            "Eres bibliotecario académico. Generas referencias en formato APA 7 "
+            "de fuentes REALES y RECONOCIDAS sobre el tema dado. "
+            "Usa autores conocidos, editoriales reales, revistas con factor de impacto. "
+            "Si dudas de una referencia exacta, prefiere obras canónicas del campo."
+        )
+        user = (
+            f"Tema: {topic}\n\n"
+            f"Genera {remaining} referencias en formato APA 7 sobre este tema. "
+            "Devuelve UNA referencia por línea, sin numerar, sin comentarios.\n\n"
+            "Formato:\n"
+            "Apellido, N. (AÑO). *Título del libro o artículo*. Editorial o Revista, vol(núm), pp-pp."
+        )
+        try:
+            llm_refs = _llm_call(user, max_tokens=1000, system=system).strip()
+        except Exception:
+            llm_refs = ""
+
+    parts = [l for l in real_lines if l]
+    if llm_refs:
+        parts.append(llm_refs)
+    return "\n".join(parts)
 
 
 # ── Ensamblador principal ─────────────────────────────────────────────────────
@@ -388,14 +452,22 @@ def _do_research(topic: str, target_pages: int, norm: str,
 
     # ── STREAMING: generar cada sección sobrescribiendo el mismo archivo ──────
     section_contents: list[str] = []
+    collected_sources: list[dict] = []   # fuentes web reales encontradas
     for i, (sec_title, sec_desc) in enumerate(sections, 1):
         if task and task.cancel_flag.is_set():
             return "Investigación cancelada por el usuario."
-        _progress(f"Sección {i}/{n}: {sec_title[:40]}")
+
+        # Fundamentar la sección con datos web reales (fail-safe sin internet)
+        _progress(f"Sección {i}/{n}: buscando fuentes — {sec_title[:35]}")
+        web_ctx, web_sources = _gather_web_context(topic, sec_title)
+        collected_sources.extend(web_sources)
+
+        _progress(f"Sección {i}/{n}: redactando — {sec_title[:35]}")
         try:
             content = _generate_section(
                 topic, sec_title, sec_desc, all_titles,
                 style_hint, words_target=words_per_section,
+                web_context=web_ctx,
             )
             section_contents.append(content)
         except Exception as e:
@@ -413,9 +485,10 @@ def _do_research(topic: str, target_pages: int, norm: str,
             )
         _emit("\n\n".join(partial_parts))
 
-    # ── ABSTRACT + REFERENCIAS ────────────────────────────────────────────────
+    # ── ABSTRACT + REFERENCIAS (con fuentes web reales priorizadas) ──────────
     _progress("Generando referencias...")
-    refs = _generate_references(topic, n=max(6, target_pages // 3))
+    refs = _generate_references(topic, n=max(6, target_pages // 3),
+                                real_sources=collected_sources)
 
     _progress("Generando resumen / abstract...")
     try:

@@ -8,13 +8,24 @@ class NotificationWatcher:
         self._seen_ids = set()
 
     async def start(self):
+        # Verificar disponibilidad del módulo ANTES — es opcional, no un error
+        try:
+            from winrt.windows.ui.notifications.management import (  # noqa: F401
+                UserNotificationListener, UserNotificationListenerAccessStatus,
+            )
+        except ImportError:
+            print("[Notifications] winrt no instalado — notificaciones del sistema "
+                  "desactivadas (opcional: pip install winrt-Windows.UI.Notifications "
+                  "winrt-Windows.UI.Notifications.Management)")
+            return
+
         try:
             from winrt.windows.ui.notifications.management import UserNotificationListener, UserNotificationListenerAccessStatus
             import winrt.windows.ui.notifications as notifications
-            
+
             self.listener = UserNotificationListener.current
             status = await self.listener.request_access_async()
-            
+
             if status != UserNotificationListenerAccessStatus.ALLOWED:
                 print("[Notifications] Acceso denegado a las notificaciones del sistema.")
                 return
@@ -23,10 +34,10 @@ class NotificationWatcher:
             nots = await self.listener.get_notifications_async(notifications.NotificationKinds.TOAST)
             for n in nots:
                 self._seen_ids.add(n.id)
-                
+
             self.token = self.listener.add_notification_changed(self._on_notification_changed)
             print("[Notifications] Escuchando alertas de WhatsApp y Mail...")
-                
+
         except Exception as e:
             print(f"[Notifications] Error iniciando watcher: {e}")
 

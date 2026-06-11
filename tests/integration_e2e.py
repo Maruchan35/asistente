@@ -327,6 +327,94 @@ def t_session_buffer():
     return "push/snapshot/clear OK"
 
 
+# ── E2E: doc_search tokenización + scoring (sin tocar archivos reales) ───────
+def t_doc_search_engine():
+    from actions.doc_search import _tokenize, _search, _normalize
+    assert _normalize("Inteligencia ARTIFICIAL") == "inteligencia artificial"
+    tokens = _tokenize("La Inteligencia Artificial en la economía moderna")
+    assert "inteligencia" in tokens and "economia" in tokens
+    assert "la" not in tokens   # stopword
+
+    fake_index = {"files": {
+        "C:/docs/ia.docx": {
+            "name": "ia.docx", "n_tokens": 100, "mtime": 0,
+            "tf": {"inteligencia": 8, "artificial": 8, "economia": 4},
+            "preview": "La inteligencia artificial transforma la economía global.",
+        },
+        "C:/docs/recetas.docx": {
+            "name": "recetas.docx", "n_tokens": 80, "mtime": 0,
+            "tf": {"cocina": 10, "pastel": 5},
+            "preview": "Recetas de cocina para pasteles.",
+        },
+    }}
+    results = _search("inteligencia artificial", fake_index, max_results=5)
+    assert len(results) == 1, f"esperaba 1 match, got {len(results)}"
+    assert results[0]["name"] == "ia.docx"
+    return f"score={results[0]['score']}"
+
+
+# ── E2E: self_update check (solo lectura, no modifica nada) ──────────────────
+def t_self_update_check():
+    from actions.self_update import _run_git
+    code, out = _run_git("rev-parse", "HEAD")
+    assert code == 0, f"git no disponible: {out}"
+    assert len(out.strip()) == 40, "HEAD no es un hash valido"
+    return f"HEAD={out[:8]}"
+
+
+# ── E2E: audio ducking (sin reproducir — solo que no crashee) ─────────────────
+def t_audio_ducking():
+    from core.audio_ducking import duck, unduck, is_enabled
+    assert isinstance(is_enabled(), bool)
+    duck()     # puede no encontrar sesiones — no debe lanzar
+    unduck()
+    return "duck/unduck sin excepciones"
+
+
+# ── E2E: telegram bot importa sin python-telegram-bot ─────────────────────────
+def t_telegram_import():
+    from core.telegram_bot import start_telegram_listener, TelegramAPI, TOOLS
+    assert len(TOOLS) >= 10
+    # start con token vacío debe ser no-op silencioso
+    start_telegram_listener()
+    return f"{len(TOOLS)} tools remotas"
+
+
+# ── E2E: sandbox bloquea en dispatcher (simulación del flujo confirmed) ──────
+def t_sandbox_confirm_flow():
+    from core.sandbox import classify_command
+    r1 = classify_command("Remove-Item -Recurse -Force C:\\Users\\test\\Desktop")
+    assert r1.needs_confirmation(), "debió requerir confirmación"
+    r2 = classify_command("Get-Date")
+    assert not r2.needs_confirmation()
+    return f"{r1.risk} bloqueado, SAFE pasa"
+
+
+# ── E2E: deep_research web grounding (parser fail-safe sin red) ───────────────
+def t_deep_research_grounding():
+    from actions import deep_research as dr
+    # Sin red / con error → debe devolver ("", []) sin lanzar
+    import actions.web_search as ws
+    orig = ws._ddg_lite_structured
+    ws._ddg_lite_structured = lambda *a, **k: (_ for _ in ()).throw(OSError("sin red"))
+    try:
+        ctx, sources = dr._gather_web_context("tema", "seccion")
+        assert ctx == "" and sources == []
+    finally:
+        ws._ddg_lite_structured = orig
+    # Con resultados simulados
+    ws._ddg_lite_structured = lambda *a, **k: [
+        {"title": "Estudio IA 2026", "url": "https://example.com/x", "snippet": "datos"}]
+    try:
+        ctx, sources = dr._gather_web_context("tema", "seccion")
+        assert "Estudio IA 2026" in ctx and len(sources) == 1
+    finally:
+        ws._ddg_lite_structured = orig
+    # Referencias con fuentes reales
+    refs = dr._generate_references.__wrapped__ if hasattr(dr._generate_references, "__wrapped__") else None
+    return "fail-safe + grounding OK"
+
+
 TESTS = {
     "memory_e2e":              t_memory_e2e,
     "document_creator_full":   t_document_creator_full,
@@ -340,6 +428,12 @@ TESTS = {
     "proactive_engine":        t_proactive_engine,
     "usage_dashboard":         t_usage_dashboard,
     "session_buffer":          t_session_buffer,
+    "doc_search_engine":       t_doc_search_engine,
+    "self_update_check":       t_self_update_check,
+    "audio_ducking":           t_audio_ducking,
+    "telegram_import":         t_telegram_import,
+    "sandbox_confirm_flow":    t_sandbox_confirm_flow,
+    "deep_research_grounding": t_deep_research_grounding,
 }
 
 

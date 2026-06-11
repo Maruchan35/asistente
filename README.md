@@ -35,6 +35,12 @@ Un asistente de voz inspirado en el JARVIS de Iron Man, construido sobre Gemini 
 - **Focus mode** — silencia notificaciones y proactividad por X minutos
 - **Proactividad** — detecta patrones (lunes 9am → calendario) y sugiere acciones
 - **Dashboard de uso** — top herramientas, latencias, errores, memoria, quota
+- **Auto-update** — *"JARVIS, actualízate"* hace git pull + dependencias + reinicio
+- **Audio ducking** — baja Spotify/Chrome al 30% mientras JARVIS habla y los restaura al callar
+- **Doc search (RAG local)** — *"¿qué decía mi documento de X?"* busca dentro de tus Word/PDF/PPT
+- **Control remoto Telegram** — capturas, apps, archivos, lanzar investigaciones desde el teléfono
+- **Cancelación por voz** — *"cancela la investigación"* detiene tareas en curso
+- **Sandbox de terminal** — comandos peligrosos requieren confirmación verbal con el comando exacto
 
 ### 🎨 UI
 - Holograma dorado dinámico (Glassmorphism, QWebEngineView)
