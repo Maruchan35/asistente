@@ -415,6 +415,118 @@ def t_deep_research_grounding():
     return "fail-safe + grounding OK"
 
 
+# ── E2E: núcleo de autonomía ──────────────────────────────────────────────────
+def t_autonomy_core():
+    from core.autonomy import (set_level, get_level, is_allowed,
+                               kill, resume, is_killed, audit, audit_report)
+    orig = get_level()
+    try:
+        set_level(1)
+        assert not is_allowed("SAFE"), "nivel 1 no debe auto-ejecutar nada"
+        set_level(2)
+        assert is_allowed("MEDIUM") and not is_allowed("HIGH")
+        set_level(3)
+        assert is_allowed("HIGH") and not is_allowed("CRITICAL"), "CRITICAL nunca pasa"
+        kill()
+        assert is_killed() and not is_allowed("SAFE"), "kill switch debe bloquear todo"
+        resume()
+        assert not is_killed()
+        audit("test", "accion de prueba", "ok")
+        rep = audit_report(hours=1)
+        assert "accion de prueba" in rep
+    finally:
+        set_level(orig)
+        resume()
+    return "niveles + kill + audit OK"
+
+
+def t_autonomy_control_tool():
+    from actions.autonomy_control import autonomy_control
+    from core.autonomy import get_level, set_level
+    orig = get_level()
+    try:
+        r = autonomy_control({"action": "set_level", "level": 2})
+        assert "2" in r and "ASISTIDO" in r
+        r2 = autonomy_control({"action": "status"})
+        assert "nivel 2" in r2.lower()
+        r3 = autonomy_control({"action": "report", "hours": 1})
+        assert isinstance(r3, str) and len(r3) > 5
+    finally:
+        set_level(orig)
+    return "tool de voz OK"
+
+
+def t_verify_outcome():
+    from actions.verify_outcome import verify_outcome
+    import tempfile, os
+    tmp = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+    tmp.write(b"x" * 2048); tmp.close()
+    try:
+        r1 = verify_outcome({"check": "file_exists", "target": tmp.name})
+        assert "VERIFICADO" in r1
+        r2 = verify_outcome({"check": "file_exists", "target": tmp.name + ".nope"})
+        assert "FALLO" in r2
+        r3 = verify_outcome({"check": "file_size_min", "target": tmp.name, "min_kb": 1})
+        assert "VERIFICADO" in r3
+        r4 = verify_outcome({"check": "file_recent", "target": tmp.name, "max_age_s": 60})
+        assert "VERIFICADO" in r4
+        r5 = verify_outcome({"check": "process_running", "target": "python"})
+        assert "VERIFICADO" in r5
+    finally:
+        os.unlink(tmp.name)
+    return "5 checks OK"
+
+
+def t_self_heal_scan():
+    from actions.self_heal import _scan, _signature, _file_from_trace
+    # _scan no debe lanzar (puede o no haber errores reales)
+    patterns = _scan()
+    # firma estable
+    sig = _signature({"tool": "x", "exc_type": "ValueError", "exc_msg": "bad"})
+    assert "ValueError" in sig
+    # localizar archivo del proyecto en un traceback simulado
+    trace = f'File "{ROOT / "actions" / "weather_report.py"}", line 10, in x'
+    rel = _file_from_trace(trace)
+    assert rel is not None and "weather_report" in str(rel)
+    # los protegidos NO son parchables
+    from actions.self_heal import _is_patchable
+    from pathlib import Path as _P
+    ok, why = _is_patchable(_P("actions/terminal_agent.py"))
+    assert not ok, "terminal_agent debe estar protegido"
+    ok2, _ = _is_patchable(_P("actions/weather_report.py"))
+    assert ok2
+    return f"{len(patterns)} patrones, protecciones OK"
+
+
+def t_system_repair_reports():
+    from actions.system_repair import system_repair
+    r = system_repair({"repair": "disk_report"})
+    assert "GB" in r
+    # gate de autonomía: reparación MEDIUM en nivel 1 sin confirmar → bloqueada
+    from core.autonomy import set_level, get_level, resume
+    orig = get_level()
+    try:
+        resume()
+        set_level(1)
+        r2 = system_repair({"repair": "restart_app", "target": "fakeapp"})
+        assert "no la permite" in r2 or "confirmaci" in r2.lower()
+    finally:
+        set_level(orig)
+    return "reports + gate OK"
+
+
+def t_autonomy_daemon():
+    from core.autonomy_daemon import _get_idle_seconds, is_running, start, stop
+    idle = _get_idle_seconds()
+    assert idle >= 0
+    # start/stop sin crashear
+    start()
+    import time as _t; _t.sleep(0.2)
+    assert is_running()
+    stop()
+    return f"idle={idle:.0f}s daemon start/stop OK"
+
+
 TESTS = {
     "memory_e2e":              t_memory_e2e,
     "document_creator_full":   t_document_creator_full,
@@ -434,6 +546,12 @@ TESTS = {
     "telegram_import":         t_telegram_import,
     "sandbox_confirm_flow":    t_sandbox_confirm_flow,
     "deep_research_grounding": t_deep_research_grounding,
+    "autonomy_core":           t_autonomy_core,
+    "autonomy_control_tool":   t_autonomy_control_tool,
+    "verify_outcome":          t_verify_outcome,
+    "self_heal_scan":          t_self_heal_scan,
+    "system_repair_reports":   t_system_repair_reports,
+    "autonomy_daemon":         t_autonomy_daemon,
 }
 
 

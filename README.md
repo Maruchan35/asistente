@@ -30,6 +30,16 @@ Un asistente de voz inspirado en el JARVIS de Iron Man, construido sobre Gemini 
 - Calendario, recordatorios, scheduler
 - Terminal (PowerShell/CMD) con sandbox de seguridad
 
+### 🤖 Autonomía real (nuevo)
+- **Niveles de autonomía 1/2/3** — *"modo autónomo"*: ejecuta solo lo permitido por nivel; lo CRÍTICO siempre consulta
+- **Kill switch** — *"JARVIS, detente"* congela toda actividad autónoma al instante
+- **Auditoría total** — *"¿qué hiciste mientras no estaba?"* → registro completo en `logs/autonomy.jsonl`
+- **Self-healing** — detecta sus propias fallas repetidas, las diagnostica con IA y se parcha con backup + tests + rollback automático
+- **Verificación de resultados** — comprueba que los archivos/apps realmente existen tras actuar; reintenta por caminos alternativos
+- **Daemon de idle** — cuando te ausentas: reindexa documentos, busca actualizaciones, escanea fallas; al volver te resume qué hizo
+- **Playbook de reparaciones** — wifi caído, app congelada, DNS, servicio de audio, disco lleno
+- **Watchdog** — `JARVIS_Watchdog.bat` relanza JARVIS si crashea y le informa del reinicio
+
 ### 🎯 Modos especiales
 - **Pair programming** — JARVIS observa tu IDE y reporta bugs en el activity panel sin interrumpir
 - **Focus mode** — silencia notificaciones y proactividad por X minutos

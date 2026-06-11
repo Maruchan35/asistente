@@ -2075,4 +2075,94 @@ TOOL_DECLARATIONS = [
             "required": ["action"]
         }
     },
+    {
+        "name": "autonomy_control",
+        "description": (
+            "Controla el nivel de autonomia de JARVIS y su registro de actividad. "
+            "action='set_level' con level 1 (manual: pregunta todo), 2 (asistido: ejecuta "
+            "lo seguro solo) o 3 (autonomo: ejecuta todo salvo lo critico). "
+            "action='kill' cuando el usuario diga 'detente', 'para todo', 'modo manual ya'. "
+            "action='resume' para reanudar. action='report' cuando pregunte "
+            "'que hiciste mientras no estaba' o 'que has hecho solo'. action='status' para consultar."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["set_level", "status", "kill", "resume", "report"],
+                           "description": "set_level | status | kill | resume | report"},
+                "level": {"type": "INTEGER", "description": "Para set_level: 1, 2 o 3"},
+                "hours": {"type": "INTEGER", "description": "Para report: ventana en horas (default 24)"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "verify_outcome",
+        "description": (
+            "Verifica que una accion realmente ocurrio ANTES de reportar exito al usuario. "
+            "Usar despues de crear archivos, abrir apps o completar tareas importantes. "
+            "Si la verificacion FALLA, reintenta la accion por un camino alternativo "
+            "(maximo 2 reintentos) antes de reportar el fallo. "
+            "checks: file_exists, file_recent (max_age_s), file_size_min (min_kb), "
+            "process_running, window_open, url_reachable, screen_contains."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "check": {"type": "STRING",
+                          "enum": ["file_exists", "file_recent", "file_size_min",
+                                   "process_running", "window_open", "url_reachable", "screen_contains"],
+                          "description": "Tipo de verificacion"},
+                "target": {"type": "STRING", "description": "Ruta, nombre de proceso/ventana, URL o texto a verificar"},
+                "max_age_s": {"type": "INTEGER", "description": "Para file_recent: antiguedad maxima en segundos"},
+                "min_kb": {"type": "INTEGER", "description": "Para file_size_min: tamano minimo en KB"}
+            },
+            "required": ["check", "target"]
+        }
+    },
+    {
+        "name": "self_heal",
+        "description": (
+            "Sistema de auto-reparacion de JARVIS. action='scan' lista fallas repetidas "
+            "de las ultimas 24h. action='diagnose' analiza una falla con IA y propone parche. "
+            "action='fix' aplica el parche CON backup + tests + rollback automatico si fallan. "
+            "Usar cuando el usuario diga 'reparate', 'arregla tus errores', 'que fallas tienes', "
+            "o cuando una herramienta falle repetidamente en la conversacion. "
+            "FLUJO: scan -> diagnose -> confirmar con el usuario -> fix con confirmed=true."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["scan", "diagnose", "fix"],
+                           "description": "scan | diagnose | fix"},
+                "pattern_index": {"type": "INTEGER", "description": "Numero de falla del scan (1 = mas frecuente)"},
+                "confirmed": {"type": "BOOLEAN", "description": "true solo si el usuario confirmo aplicar el fix"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "system_repair",
+        "description": (
+            "Playbook de reparaciones del sistema operativo. Usar cuando algo del PC falle: "
+            "internet caido -> network_report y luego wifi_reconnect o flush_dns; "
+            "app congelada (Spotify, Chrome...) -> restart_app con target; "
+            "sin sonido -> restart_audio; disco lleno -> disk_report. "
+            "Los reports (disk_report, network_report) son seguros y puedes ejecutarlos "
+            "libremente para diagnosticar. Las reparaciones respetan el nivel de autonomia: "
+            "si devuelve que requiere confirmacion, pregunta al usuario y re-llama con confirmed=true."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "repair": {"type": "STRING",
+                           "enum": ["wifi_reconnect", "restart_app", "flush_dns",
+                                    "restart_audio", "disk_report", "network_report"],
+                           "description": "Reparacion a ejecutar"},
+                "target": {"type": "STRING", "description": "Para restart_app: nombre de la app (ej: spotify)"},
+                "confirmed": {"type": "BOOLEAN", "description": "true si el usuario ya confirmo una reparacion riesgosa"}
+            },
+            "required": ["repair"]
+        }
+    },
 ]

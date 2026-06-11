@@ -766,6 +766,44 @@ class JarvisLive:
         except Exception as e:
             _jlog_error("No se pudo iniciar motor proactivo", exc=e)
 
+        # ── Daemon de autonomía: trabaja cuando el usuario está ausente ──────
+        try:
+            from core.autonomy_daemon import start as _daemon_start
+            def _on_idle_work_summary(summary: str):
+                try:
+                    self._inject_text(
+                        f"(El usuario acaba de volver. Mientras no estaba hiciste: {summary}. "
+                        "Ménciónaselo en UNA frase casual, sin lista.)"
+                    )
+                except Exception:
+                    pass
+            _daemon_start(on_summary=_on_idle_work_summary)
+            _jlog_info("Daemon de autonomía iniciado", category="system")
+        except Exception as e:
+            _jlog_error("No se pudo iniciar daemon de autonomía", exc=e)
+
+        # ── Reportar crashes del watchdog (si los hubo) ──────────────────────
+        try:
+            _crash_log = Path("logs/crashes.jsonl")
+            if _crash_log.exists():
+                import time as _t
+                _lines = _crash_log.read_text(encoding="utf-8").strip().split("\n")
+                if _lines and _lines[-1]:
+                    _last = json.loads(_lines[-1])
+                    from datetime import datetime as _dt
+                    _age = _t.time() - _dt.fromisoformat(_last["ts"]).timestamp()
+                    if _age < 300:   # crasheó hace < 5 min — este arranque es del watchdog
+                        def _report_crash():
+                            _t.sleep(10)
+                            self._inject_context(
+                                f"(JARVIS crasheó hace un momento (exit={_last['exit_code']}) "
+                                "y el watchdog lo relanzó. Si el usuario habla, menciona "
+                                "brevemente que hubo un reinicio automático.)"
+                            )
+                        threading.Thread(target=_report_crash, daemon=True).start()
+        except Exception:
+            pass
+
         # ── Health check al arrancar (background, no bloquea) ────────────────
         def _health_bg():
             try:
@@ -1926,7 +1964,18 @@ class JarvisLive:
                     if isinstance(_confirmed, str):
                         _confirmed = _confirmed.lower() in ("true", "1", "yes", "sí", "si")
                     _report = _sandbox_cmd(_cmd)
-                    if _report is not None and _report.needs_confirmation() and not _confirmed:
+                    # Nivel de autonomía: en nivel 3, HIGH se auto-permite
+                    # (CRITICAL siempre requiere confirmación, sin excepciones)
+                    _auto_ok = False
+                    try:
+                        from core.autonomy import is_allowed as _aut_allowed, audit as _aut_audit
+                        if _report is not None and _report.risk == "HIGH" and _aut_allowed("HIGH"):
+                            _auto_ok = True
+                            _aut_audit("terminal_auto", f"HIGH auto-aprobado (nivel 3): {_cmd[:100]}", "")
+                    except Exception:
+                        pass
+                    if (_report is not None and _report.needs_confirmation()
+                            and not _confirmed and not _auto_ok):
                         _jlog_warn(f"Sandbox bloqueó comando {_report.risk}: {_cmd[:120]}",
                                    category="tool")
                         self.ui.write_log(f"🛡️ Sandbox: comando {_report.risk} requiere confirmación")
