@@ -551,6 +551,82 @@ def t_whatsapp_watch():
     return "parser + lifecycle + notify OK"
 
 
+# ── E2E: cifrado de config ───────────────────────────────────────────────────
+def t_secure_config():
+    from core.secure_config import encrypt_value, decrypt_value, _is_sensitive
+    assert decrypt_value(encrypt_value("sk-abc-123")) == "sk-abc-123"
+    # valor no cifrado se devuelve igual
+    assert decrypt_value("plaintext") == "plaintext"
+    assert _is_sensitive("gemini_api_key") and not _is_sensitive("timezone")
+    return "roundtrip + sensitivity OK"
+
+
+# ── E2E: memoria de WhatsApp ──────────────────────────────────────────────────
+def t_wa_memory():
+    from core.wa_memory import log_message, log_transcript, get_conversation, list_chats
+    log_message("E2EChat", "Pedro", "hola jarvis")
+    log_message("E2EChat", "Yo (JARVIS)", "buenas, en que ayudo")
+    log_transcript("E2EChat", "Pedro: como estas\nYo: muy bien")
+    conv = get_conversation("E2EChat")
+    assert "Pedro" in conv and "JARVIS" in conv
+    assert "E2EChat" in list_chats()
+    return "log + transcript + retrieve OK"
+
+
+# ── E2E: cache de visión ──────────────────────────────────────────────────────
+def t_vision_cache():
+    from core.vision_cache import put_cache, get_cached, is_text_only_query, cache_key
+    put_cache(b"img1", "q1", "respuesta-cacheada")
+    assert get_cached(b"img1", "q1") == "respuesta-cacheada"
+    assert get_cached(b"img2", "q1") is None   # imagen distinta
+    assert is_text_only_query("extrae el texto de la pantalla")
+    assert not is_text_only_query("describe lo que ves")
+    return "cache hit/miss + text-only OK"
+
+
+# ── E2E: modo offline ─────────────────────────────────────────────────────────
+def t_offline_mode():
+    from core.offline_mode import is_online, status, ollama_available
+    online = is_online(force=True)
+    st = status()
+    assert isinstance(online, bool) and "online" in st
+    return f"online={online} ollama={st['ollama']}"
+
+
+# ── E2E: goals con recurrencia y nudges ───────────────────────────────────────
+def t_goals_nudges():
+    from actions.goals import goals, get_pending_nudges
+    # Crear objetivo diario
+    r = goals({"action": "add", "goal": "Test E2E avanzar proyecto", "recurrence": "daily"})
+    assert "agregado" in r.lower()
+    nudges = get_pending_nudges()
+    assert any("Test E2E" in n["text"] for n in nudges), "no genero nudge diario"
+    # Limpiar: borrar el objetivo de prueba
+    import json
+    from pathlib import Path
+    gp = ROOT / "config" / "goals.json"
+    data = json.loads(gp.read_text(encoding="utf-8"))
+    data = [g for g in data if "Test E2E" not in g.get("text", "")]
+    gp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return f"{len(nudges)} nudges generados"
+
+
+# ── E2E: skill factory validaciones (sin LLM real) ───────────────────────────
+def t_skill_factory_validate():
+    from actions import skill_factory as sf
+    # Nombre inválido y colisión se detectan en _design — probamos los regex/helpers
+    assert sf._NAME_RE.match("mi_skill_nueva")
+    assert not sf._NAME_RE.match("Mala-Skill")   # mayúscula y guión
+    assert not sf._NAME_RE.match("ab")           # muy corto
+    existing = sf._existing_tool_names()
+    assert "whatsapp" in existing and len(existing) > 50
+    # Patrón peligroso detectado
+    import re
+    bad_code = "import os\ndef x(p,player=None):\n    os.remove('/tmp/x')\n    return 'ok'"
+    assert any(re.search(pat, bad_code, re.IGNORECASE) for pat in sf._FORBIDDEN_CODE)
+    return "validaciones de seguridad OK"
+
+
 TESTS = {
     "memory_e2e":              t_memory_e2e,
     "document_creator_full":   t_document_creator_full,
@@ -577,6 +653,12 @@ TESTS = {
     "system_repair_reports":   t_system_repair_reports,
     "autonomy_daemon":         t_autonomy_daemon,
     "whatsapp_watch":          t_whatsapp_watch,
+    "secure_config":           t_secure_config,
+    "wa_memory":               t_wa_memory,
+    "vision_cache":            t_vision_cache,
+    "offline_mode":            t_offline_mode,
+    "goals_nudges":            t_goals_nudges,
+    "skill_factory_validate":  t_skill_factory_validate,
 }
 
 

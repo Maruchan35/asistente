@@ -60,22 +60,29 @@ def goals(parameters: dict, player=None) -> str:
     elif action in ("add", "create", "agregar", "crear", "nuevo"):
         text     = parameters.get("goal", parameters.get("text", "")).strip()
         deadline = parameters.get("deadline", "").strip()
+        # recurrence: "" | "daily" | "weekly" — para seguimiento proactivo
+        recurrence = parameters.get("recurrence", "").strip().lower()
+        if recurrence in ("diario", "diaria", "cada dia", "cada día"): recurrence = "daily"
+        if recurrence in ("semanal", "cada semana"): recurrence = "weekly"
         if not text:
             return "Necesito el texto del objetivo, señor."
         items = _load()
         new = {
-            "id":       str(uuid.uuid4())[:8],
-            "text":     text,
-            "done":     False,
-            "steps":    [],
-            "deadline": deadline,
-            "created":  datetime.now().strftime("%Y-%m-%d"),
-            "progress": 0,
+            "id":         str(uuid.uuid4())[:8],
+            "text":       text,
+            "done":       False,
+            "steps":      [],
+            "deadline":   deadline,
+            "recurrence": recurrence,
+            "last_nudge": "",
+            "created":    datetime.now().strftime("%Y-%m-%d"),
+            "progress":   0,
         }
         items.append(new)
         _save(items)
         dl = f" (fecha límite: {deadline})" if deadline else ""
-        msg = f"Objetivo agregado: '{text}'{dl}."
+        rc = f" — te lo recordaré {('cada día' if recurrence=='daily' else 'cada semana')}" if recurrence else ""
+        msg = f"Objetivo agregado: '{text}'{dl}{rc}."
         log(msg); return msg
 
     # ── COMPLETE ─────────────────────────────────────────────────────────────
@@ -186,3 +193,62 @@ def goals(parameters: dict, player=None) -> str:
         return "\n".join(lines)
 
     return f"Acción '{action}' no reconocida. Usa: list | add | complete | delete | update | add_step | complete_step | detail"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SEGUIMIENTO PROACTIVO (lo llama el daemon de autonomía)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_pending_nudges() -> list[dict]:
+    """Objetivos que necesitan un recordatorio AHORA:
+       • recurrentes (daily/weekly) que no se han 'tocado' en su periodo
+       • con deadline próximo (≤ 2 días) o vencido
+    Marca last_nudge para no repetir el mismo día. Devuelve lista de dicts
+    {text, reason} para que JARVIS los mencione."""
+    from datetime import date, timedelta
+    items = _load()
+    today = date.today()
+    today_s = today.isoformat()
+    nudges = []
+    changed = False
+
+    for g in items:
+        if g.get("done"):
+            continue
+        reason = None
+
+        # Deadline próximo o vencido
+        dl = g.get("deadline", "").strip()
+        if dl:
+            try:
+                dl_date = date.fromisoformat(dl[:10])
+                days = (dl_date - today).days
+                if days < 0:
+                    reason = f"venció hace {-days} día(s)"
+                elif days <= 2:
+                    reason = f"vence en {days} día(s)"
+            except Exception:
+                pass
+
+        # Recurrencia
+        rec = g.get("recurrence", "")
+        last = g.get("last_nudge", "")
+        if rec == "daily" and last != today_s:
+            reason = reason or "objetivo diario pendiente de hoy"
+        elif rec == "weekly":
+            try:
+                last_date = date.fromisoformat(last) if last else today - timedelta(days=8)
+                if (today - last_date).days >= 7:
+                    reason = reason or "objetivo semanal pendiente"
+            except Exception:
+                reason = reason or "objetivo semanal pendiente"
+
+        if reason and g.get("last_nudge") != today_s:
+            nudges.append({"id": _short_id(g["id"]), "text": g["text"],
+                           "reason": reason, "progress": g.get("progress", 0)})
+            g["last_nudge"] = today_s
+            changed = True
+
+    if changed:
+        _save(items)
+    return nudges

@@ -91,6 +91,14 @@ Cuando recibas una nota `(WHATSAPP WATCHER: llegó mensaje nuevo...)`:
 - REGLA: si el documento pedido supera 3 páginas o dice
   "extenso/largo/profundo/completo" → `deep_research`, en segundo plano.
 
+### EXTENDERSE Y APRENDER
+- "necesito que puedas X" / "créate una herramienta para Y" / "aprende a Z"  → `skill_factory` design
+- (tras confirmar) "sí, instálala"                                            → `skill_factory` install confirmed=true
+- "modo atento" / "vigila mi pantalla" / "avísame si ves un error"           → `screen_awareness` start
+- "¿qué le dijiste a X?" / "resume mi conversación con Y"                     → `wa_memory`
+- "cifra mis claves" / "¿están seguras mis API keys?"                         → `secure_config_tool`
+- "¿hay internet?" / "¿funcionas sin conexión?"                              → `offline_status`
+
 ### AUTONOMÍA
 - "modo autónomo" / "opera solo"                              → `autonomy_control` set_level 3
 - "modo asistido"                                             → `autonomy_control` set_level 2

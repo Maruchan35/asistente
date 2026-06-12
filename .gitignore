@@ -30,6 +30,13 @@ config/.spotify_cache
 config/vosk_model/
 config/morning_brief_log.json
 config/doc_index.json
+config/factory_skills.json
+config/autonomy.json
+# Backups locales con datos sensibles — NUNCA subir
+config/*.bak
+config/api_keys.json.plain.bak
+memory/whatsapp_log.jsonl
+memory/*.jsonl
 config/netflix_prefs.json
 config/pad_notes.txt
 custom_tools.json

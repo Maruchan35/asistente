@@ -532,10 +532,15 @@ def _get_api_key() -> str:
     if _cached_api_key:
         return _cached_api_key
     try:
-        with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
-            _cached_api_key = json.load(f).get("gemini_api_key", "").strip()
-    except FileNotFoundError:
-        _cached_api_key = ""
+        # read_config descifra automáticamente las claves cifradas (enc::...)
+        from core.secure_config import read_config
+        _cached_api_key = read_config().get("gemini_api_key", "").strip()
+    except Exception:
+        try:
+            with open(API_CONFIG_PATH, "r", encoding="utf-8") as f:
+                _cached_api_key = json.load(f).get("gemini_api_key", "").strip()
+        except FileNotFoundError:
+            _cached_api_key = ""
 
     # Validar que no sea el placeholder del template
     _placeholders = (
@@ -803,6 +808,44 @@ class JarvisLive:
                         threading.Thread(target=_report_crash, daemon=True).start()
         except Exception:
             pass
+
+        # ── Monitor de conectividad: avisar al caer/volver internet ──────────
+        try:
+            from core.offline_mode import start_monitor, speak_offline, think_offline, ollama_available
+            def _on_conn_change(online: bool):
+                if not online:
+                    # Internet caído — Gemini Live morirá. Avisar por TTS local.
+                    _jlog_warn("Internet caído — modo degradado", category="system")
+                    msg = ("Señor, se perdió la conexión a internet. "
+                           + ("Puedo operar en modo local limitado."
+                              if ollama_available()
+                              else "Las funciones de voz estarán limitadas hasta reconectar."))
+                    threading.Thread(target=lambda: speak_offline(msg), daemon=True).start()
+                else:
+                    _jlog_info("Internet restaurado", category="system")
+                    try:
+                        self._inject_context(
+                            "(La conexión a internet se restauró. Avisa brevemente al usuario "
+                            "que vuelves a estar en línea completa.)")
+                    except Exception:
+                        pass
+            start_monitor(on_change=_on_conn_change)
+        except Exception as e:
+            _jlog_error("No se pudo iniciar monitor de conectividad", exc=e)
+
+        # ── Cifrar API keys en texto plano (una vez, silencioso) ─────────────
+        try:
+            from core.secure_config import encrypt_file, status as _sec_status
+            _st = _sec_status()
+            if _st.get("plaintext", 0) > 0 and _st.get("crypto_available"):
+                _res = encrypt_file()
+                if _res.get("ok") and _res.get("encrypted"):
+                    _jlog_info(f"API keys cifradas ({_res['encrypted']} valores)", category="system")
+                    # Invalidar cache para releer descifrado
+                    global _cached_api_key
+                    _cached_api_key = None
+        except Exception as e:
+            _jlog_warn(f"Cifrado de keys falló: {e}")
 
         # ── Health check al arrancar (background, no bloquea) ────────────────
         def _health_bg():
@@ -1395,6 +1438,53 @@ class JarvisLive:
                 id=fc.id, name=name,
                 response={"result": "Apagando JARVIS. ¡Hasta luego, señor!"}
             )
+
+        if name == "wa_memory":
+            try:
+                from core.wa_memory import wa_memory as _wam
+                result = _wam(parameters=args, player=self.ui)
+            except Exception as e:
+                result = f"Error consultando memoria de WhatsApp: {e}"
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+
+        if name == "screen_awareness":
+            try:
+                from core.screen_awareness import screen_awareness as _sa
+                # Pasar self para que el módulo acceda a self.speak
+                result = _sa(parameters=args, player=self)
+            except Exception as e:
+                result = f"Error en modo atento: {e}"
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+
+        if name == "secure_config_tool":
+            try:
+                from core.secure_config import status as _sc_status, encrypt_file
+                act = (args.get("action") or "status").lower()
+                if act == "encrypt":
+                    r = encrypt_file()
+                    if r.get("ok"):
+                        global _cached_api_key
+                        _cached_api_key = None
+                        result = f"Cifré {r.get('encrypted',0)} claves. Las que ya estaban cifradas se respetaron."
+                    else:
+                        result = f"No pude cifrar: {r.get('reason')}"
+                else:
+                    st = _sc_status()
+                    result = (f"Claves cifradas: {st['encrypted']}, en texto plano: {st['plaintext']}. "
+                              f"Cifrado disponible: {'sí' if st['crypto_available'] else 'no'}.")
+            except Exception as e:
+                result = f"Error: {e}"
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
+
+        if name == "offline_status":
+            try:
+                from core.offline_mode import status as _off_status
+                st = _off_status()
+                result = (f"Internet: {'en línea' if st['online'] else 'SIN conexión'}. "
+                          f"Ollama local: {'disponible' if st['ollama'] else 'no disponible'}.")
+            except Exception as e:
+                result = f"Error: {e}"
+            return types.FunctionResponse(id=fc.id, name=name, response={"result": result})
 
         if name == "self_update":
             if self_update:

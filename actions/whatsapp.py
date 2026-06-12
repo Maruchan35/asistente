@@ -337,6 +337,14 @@ def whatsapp(parameters: dict, player=None) -> str:
                 try: player.write_log(f"✅ Mensaje enviado a {target_desc}")
                 except: pass
 
+            # Guardar la respuesta en memoria de conversaciones (consultable luego:
+            # "¿qué le dijiste a Juan?")
+            try:
+                from core.wa_memory import log_message
+                log_message(target_desc, "Yo (JARVIS)", message)
+            except Exception:
+                pass
+
             # MODO CONVERSACIÓN: cerrar el chat tras responder (Escape).
             # Si el chat queda abierto y enfocado, WhatsApp marca los mensajes
             # entrantes como leídos AL INSTANTE → el contador '(N)' del título
@@ -559,6 +567,12 @@ def whatsapp(parameters: dict, player=None) -> str:
         if not r:
             return "No pude leer la pantalla de WhatsApp."
         if receiver:
+            # Guardar lo leído en la memoria de conversaciones
+            try:
+                from core.wa_memory import log_transcript
+                log_transcript(receiver, r)
+            except Exception:
+                pass
             return (f"Contenido del chat con '{receiver}':\n{r}\n"
                     "(Para responder usa whatsapp action=send con este receiver.)")
         return (f"{r}\n(Para leer un chat concreto: whatsapp action=read "

@@ -117,22 +117,98 @@ def _maintenance_pass() -> list[str]:
     except Exception:
         pass
 
-    # ── Objetivos persistentes pendientes ────────────────────────────────────
+    # ── Objetivos: recordatorios proactivos (recurrentes / deadlines) ─────────
     try:
-        import json as _json
-        goals_path = _BASE / "config" / "goals.json"
-        if goals_path.exists():
-            goals = _json.loads(goals_path.read_text(encoding="utf-8"))
-            items = goals if isinstance(goals, list) else goals.get("goals", [])
-            active = [g for g in items
-                      if isinstance(g, dict) and g.get("status", "active") == "active"]
-            if active:
-                from core.autonomy import audit as _audit
-                _audit("goals_review", f"{len(active)} objetivo(s) activos revisados", "ok")
+        from actions.goals import get_pending_nudges
+        nudges = get_pending_nudges()
+        if nudges:
+            from core.autonomy import audit as _audit
+            txt = "; ".join(f"{n['text']} ({n['reason']})" for n in nudges[:3])
+            _audit("goals_nudge", f"{len(nudges)} objetivo(s) requieren atención", txt)
+            done.append(f"tienes {len(nudges)} objetivo(s) pendientes: {txt}")
+    except Exception:
+        pass
+
+    # ── Organizar Descargas por reglas simples (solo nivel 2+, SAFE) ──────────
+    try:
+        if is_allowed("MEDIUM"):
+            moved = _organize_downloads()
+            if moved:
+                audit("idle_maintenance", f"Organicé {moved} archivos en Descargas", "ok")
+                done.append(f"organicé {moved} archivos en tu carpeta de Descargas")
+    except Exception:
+        pass
+
+    # ── Resumen de WhatsApp de la noche (si hubo conversación autónoma) ───────
+    try:
+        from core.wa_memory import _read_all
+        import time as _t
+        recent = [e for e in _read_all()
+                  if _t.time() - _ts_of(e) < 8 * 3600]   # últimas 8h
+        chats = set(e.get("chat", "") for e in recent)
+        if len(recent) >= 3:
+            done.append(f"mantuve {len(recent)} mensajes en WhatsApp con {len(chats)} contacto(s)")
     except Exception:
         pass
 
     return done
+
+
+def _ts_of(entry: dict) -> float:
+    from datetime import datetime as _dt
+    try:
+        return _dt.fromisoformat(entry.get("ts", "1970-01-01")).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _organize_downloads() -> int:
+    """Mover archivos de Descargas a subcarpetas por tipo. Conservador:
+    solo archivos de > 1 día de antiguedad, nunca borra, crea subcarpetas."""
+    import os
+    import shutil
+    import time as _t
+    home = Path(os.path.expanduser("~"))
+    dl = home / "Downloads"
+    if not dl.is_dir():
+        return 0
+    cats = {
+        "Documentos": {".pdf", ".docx", ".doc", ".txt", ".pptx", ".xlsx", ".csv"},
+        "Imagenes":   {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"},
+        "Instaladores": {".exe", ".msi"},
+        "Comprimidos": {".zip", ".rar", ".7z"},
+        "Audio_Video": {".mp3", ".mp4", ".mkv", ".wav", ".avi", ".mov"},
+    }
+    moved = 0
+    cutoff = _t.time() - 86400   # solo archivos > 1 día
+    try:
+        for f in dl.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                if f.stat().st_mtime > cutoff:
+                    continue
+            except OSError:
+                continue
+            ext = f.suffix.lower()
+            target_cat = next((c for c, exts in cats.items() if ext in exts), None)
+            if not target_cat:
+                continue
+            target_dir = dl / target_cat
+            target_dir.mkdir(exist_ok=True)
+            dest = target_dir / f.name
+            if dest.exists():
+                continue   # no sobrescribir nunca
+            try:
+                shutil.move(str(f), str(dest))
+                moved += 1
+            except Exception:
+                continue
+            if moved >= 50:   # límite por pasada
+                break
+    except Exception:
+        pass
+    return moved
 
 
 def _loop(on_summary=None):

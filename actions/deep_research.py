@@ -57,9 +57,13 @@ _MODELS_FALLBACK = [
 
 def _load_cfg() -> dict:
     try:
-        return json.loads(_API.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(_API.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 
 def _llm_call(prompt: str, max_tokens: int = 3500, system: str | None = None,

@@ -8,12 +8,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 def _get_api_key() -> str:
     try:
-        cfg_path = BASE_DIR / "config" / "api_keys.json"
-        if cfg_path.exists():
-            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
-            return cfg.get("deepseek_api_key", "").strip()
+        from core.secure_config import read_config
+        return read_config().get("deepseek_api_key", "").strip()
     except Exception:
-        pass
+        try:
+            cfg_path = BASE_DIR / "config" / "api_keys.json"
+            if cfg_path.exists():
+                cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                return cfg.get("deepseek_api_key", "").strip()
+        except Exception:
+            pass
     return ""
 
 def deepseek_agent(query: str, system_prompt: str | None = None) -> str:

@@ -1057,9 +1057,11 @@ TOOL_DECLARATIONS = [
             "properties": {
                 "action":      {"type": "STRING",  "description": "list | create | update_progress | complete | complete_step | add_step | delete | detail"},
                 "goal_id":     {"type": "STRING",  "description": "ID del objetivo para update/complete/delete/detail"},
+                "goal":        {"type": "STRING",  "description": "Texto del objetivo (al crear)"},
                 "title":       {"type": "STRING",  "description": "Título del objetivo"},
                 "description": {"type": "STRING",  "description": "Descripción detallada"},
                 "deadline":    {"type": "STRING",  "description": "Fecha límite ISO (YYYY-MM-DD)"},
+                "recurrence":  {"type": "STRING",  "description": "'daily' o 'weekly' para recordatorio proactivo. Usar cuando el usuario diga 'cada día', 'todos los días', 'cada semana'."},
                 "progress":    {"type": "INTEGER", "description": "Progreso 0-100"},
                 "steps":       {"type": "ARRAY",   "items": {"type": "STRING"}, "description": "Lista de pasos del objetivo"},
                 "step":        {"type": "STRING",  "description": "Texto del nuevo paso (add_step)"},
@@ -2194,5 +2196,84 @@ TOOL_DECLARATIONS = [
             },
             "required": ["action"]
         }
+    },
+    {
+        "name": "skill_factory",
+        "description": (
+            "Crea HERRAMIENTAS NUEVAS para JARVIS por voz — JARVIS se extiende a si mismo. "
+            "action='design' description='lo que debe hacer' → disena la habilidad y la muestra. "
+            "action='install' → la instala con backup + tests + rollback automatico (requiere "
+            "confirmacion del usuario o nivel autonomia 3). action='list' → habilidades creadas. "
+            "Usar cuando el usuario diga: 'necesito que puedas X', 'create una herramienta para Y', "
+            "'aprende a hacer Z', 'agregate la capacidad de'. Tras instalar, ofrece reiniciar."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["design", "install", "list"]},
+                "description": {"type": "STRING", "description": "Que debe hacer la herramienta nueva"},
+                "name": {"type": "STRING", "description": "Nombre sugerido (snake_case, opcional)"},
+                "confirmed": {"type": "BOOLEAN", "description": "true si el usuario confirmo instalar"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "wa_memory",
+        "description": (
+            "Consulta el historial de conversaciones de WhatsApp que JARVIS mantuvo "
+            "(leidas y respondidas autonomamente). Usar cuando pregunten 'que le dijiste a X', "
+            "'resume mi conversacion con Y', 'que hablaste con Z'. "
+            "action='get' chat='nombre' o action='list' para ver todos los contactos."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["get", "list"]},
+                "chat": {"type": "STRING", "description": "Nombre del contacto"},
+                "limit": {"type": "INTEGER", "description": "Cuantos mensajes (default 20)"}
+            }
+        }
+    },
+    {
+        "name": "screen_awareness",
+        "description": (
+            "Modo atento: JARVIS observa tu pantalla periodicamente y te ofrece ayuda si "
+            "detecta errores (stacktraces, dialogos de error). Usa OCR local (no gasta cuota). "
+            "Usar cuando digan 'modo atento', 'vigila mi pantalla', 'avisame si ves un error'. "
+            "action='start' | 'stop' | 'status'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["start", "stop", "status"]},
+                "interval_s": {"type": "INTEGER", "description": "Cada cuantos segundos (default 45)"}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "secure_config_tool",
+        "description": (
+            "Gestiona el cifrado de las API keys. action='status' muestra cuantas estan "
+            "cifradas. action='encrypt' cifra las que esten en texto plano. "
+            "Usar cuando pregunten por la seguridad de las claves o pidan cifrarlas."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["status", "encrypt"]}
+            },
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "offline_status",
+        "description": (
+            "Consulta el estado de conectividad y capacidades offline de JARVIS "
+            "(internet, Ollama local). Usar cuando pregunten 'hay internet', "
+            "'estas en linea', 'funcionas sin internet'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}}
     },
 ]

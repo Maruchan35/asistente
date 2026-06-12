@@ -62,6 +62,7 @@ eventlet
 # ── TTS fallback ──────────────────────────────────────────────────────────────
 gtts
 edge-tts
+pyttsx3       # TTS 100% offline (modo sin internet)
 
 # ── Voice activity detection (offline wake word) ──────────────────────────────
 vosk

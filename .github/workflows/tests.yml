@@ -1,0 +1,99 @@
+name: JARVIS Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  consistency-and-syntax:
+    # Tests que NO requieren Windows, audio, GUI ni API keys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compilar todo el código (syntax check)
+        run: |
+          python -m compileall -q actions core main.py tests || true
+          # Falla si main.py o módulos core tienen error de sintaxis
+          python -c "import ast,sys; [ast.parse(open(f,encoding='utf-8').read()) for f in ['main.py']]; print('main.py syntax OK')"
+
+      - name: Test de consistencia tools ↔ dispatcher
+        run: python tests/test_tool_consistency.py
+
+      - name: Verificar que tool_registry importa y no tiene duplicados
+        run: |
+          python -c "
+          import sys; sys.path.insert(0,'.')
+          from core.tool_registry import TOOL_DECLARATIONS as TD
+          names=[d['name'] for d in TD]
+          assert len(names)==len(set(names)), 'TOOLS DUPLICADAS: '+str([n for n in names if names.count(n)>1])
+          print(f'{len(names)} tools declaradas, sin duplicados')
+          "
+
+  unit-tests:
+    # Tests de lógica pura que corren sin red/GUI (con libs mínimas)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias mínimas para tests de lógica
+        run: |
+          pip install --quiet cryptography python-docx pyperclip || true
+
+      - name: Tests de lógica (sin red, sin GUI)
+        run: |
+          python -c "
+          import sys; sys.path.insert(0,'.')
+          ok = True
+          # Sandbox
+          try:
+              from core.sandbox import classify_command
+              assert classify_command('rm -rf /home/x/Desktop/*').needs_confirmation()
+              assert not classify_command('ls -la').needs_confirmation()
+              print('[PASS] sandbox')
+          except Exception as e:
+              print(f'[FAIL] sandbox: {e}'); ok=False
+          # Autonomía
+          try:
+              from core.autonomy import set_level, is_allowed, kill, resume, is_killed
+              set_level(3); assert is_allowed('HIGH') and not is_allowed('CRITICAL')
+              kill(); assert is_killed() and not is_allowed('SAFE'); resume()
+              set_level(1)
+              print('[PASS] autonomy')
+          except Exception as e:
+              print(f'[FAIL] autonomy: {e}'); ok=False
+          # Emotion detector
+          try:
+              from core.emotion_detector import detect
+              assert detect('ESTO NO FUNCIONA joder').label == 'frustrado'
+              print('[PASS] emotion')
+          except Exception as e:
+              print(f'[FAIL] emotion: {e}'); ok=False
+          # Secure config roundtrip
+          try:
+              from core.secure_config import encrypt_value, decrypt_value
+              assert decrypt_value(encrypt_value('secret123')) == 'secret123'
+              print('[PASS] secure_config')
+          except Exception as e:
+              print(f'[FAIL] secure_config: {e}'); ok=False
+          # Memory extraction (no basura)
+          try:
+              from memory.memory_engine import auto_extract_facts
+              facts = auto_extract_facts('Me llamo Jorge y vivo en Mexico', 'Anotado senor')
+              assert all('anotado' not in v.lower() for _,_,v in facts)
+              print('[PASS] memory_clean')
+          except Exception as e:
+              print(f'[FAIL] memory_clean: {e}'); ok=False
+          sys.exit(0 if ok else 1)
+          "

@@ -72,7 +72,32 @@ def screen_vision(parameters: dict, player=None) -> str:
         b64_image = _capture_screen_base64(save_path=img_path)
     except Exception as e:
         return f"Error al capturar la pantalla: {e}"
-        
+
+    # ── Optimización de cuota: cache + OCR local ──────────────────────────────
+    # Solo para action='question'/'describe' (no para 'show').
+    try:
+        import base64 as _b64
+        from core import vision_cache as _vc
+        _img_bytes = _b64.b64decode(b64_image)
+        # 1. Cache: misma pantalla + misma pregunta hace < 8s → respuesta cacheada
+        _cached = _vc.get_cached(_img_bytes, query)
+        if _cached is not None:
+            if player:
+                try: player.write_log("👁️ (cache de visión — sin gastar cuota)")
+                except Exception: pass
+            return _cached
+        # 2. OCR local: si solo se pide TEXTO plano y hay motor OCR instalado
+        if _vc.is_text_only_query(query):
+            _ocr_text = _vc.ocr_image(_img_bytes)
+            if _ocr_text:
+                _vc.put_cache(_img_bytes, query, _ocr_text)
+                if player:
+                    try: player.write_log("👁️ (OCR local — sin gastar cuota)")
+                    except Exception: pass
+                return f"Texto extraído de la pantalla:\n{_ocr_text}"
+    except Exception:
+        pass
+
     # Verificar si el usuario solicita mostrar o ver lo que JARVIS está viendo
     show_words = ["mostrar", "muestra", "ver", "show", "mostrame", "visu", "pantalla"]
     should_show = (action == "show") or any(w in query.lower() for w in show_words)
@@ -165,7 +190,15 @@ def screen_vision(parameters: dict, player=None) -> str:
             )
             res_text = response.text
             if res_text and res_text.strip():
-                return res_text.strip()
+                _ans = res_text.strip()
+                # Poblar cache para evitar re-consultas idénticas en ~8s
+                try:
+                    import base64 as _b64
+                    from core import vision_cache as _vc
+                    _vc.put_cache(_b64.b64decode(b64_image), query, _ans)
+                except Exception:
+                    pass
+                return _ans
             else:
                 errors.append("Gemini nativo devolvió una respuesta vacía.")
         except Exception as e:

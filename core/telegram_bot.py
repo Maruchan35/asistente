@@ -36,9 +36,13 @@ def get_config():
     if not API_CONFIG_PATH.exists():
         return {}
     try:
-        return json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(API_CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 
 chat_histories = {}
