@@ -282,6 +282,30 @@ def whatsapp(parameters: dict, player=None) -> str:
     if action == "send_text":  action = "send"
     if action in ("read_unread", "read_chat", "unread"): action = "read"
 
+    # Pausar el watcher mientras operamos la UI de WhatsApp (read/send/captions/
+    # close_chat usan pyautogui+visión 10-20s). Sin esto, el watcher dispara
+    # turnos encima y todo se congela. Se libera SIEMPRE en el finally.
+    _ui_actions = ("send", "send_image", "send_document", "read", "close_chat")
+    _watch_paused = False
+    if action in _ui_actions:
+        try:
+            from actions.whatsapp_watch import set_busy
+            set_busy(True)
+            _watch_paused = True
+        except Exception:
+            pass
+    try:
+        return _whatsapp_impl(parameters, player, action, receiver)
+    finally:
+        if _watch_paused:
+            try:
+                from actions.whatsapp_watch import set_busy
+                set_busy(False)
+            except Exception:
+                pass
+
+
+def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
     contacts = load_contacts()
 
     # ── GESTIÓN DE CONTACTOS ──────────────────────────────────────────────────

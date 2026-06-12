@@ -37,8 +37,39 @@ _state = {
 }
 _speak_cb = None               # callback para inyectar a Gemini (turn completo)
 
+# Lock de concurrencia: cuando JARVIS está LEYENDO/RESPONDIENDO en WhatsApp
+# (pyautogui + visión, 10-20s), el watcher debe PAUSAR — si no, sigue su
+# polling cada 4s, detecta el badge otra vez y reinyecta turnos encima,
+# acumulando operaciones de teclado/mouse hasta congelar todo.
+_busy = threading.Event()
+_busy_since = 0.0               # cuándo se marcó busy (para auto-expirar)
+_BUSY_MAX_S = 60.0             # si Gemini no responde en 60s, liberar solo
+_last_notify_ts = 0.0
+_NOTIFY_COOLDOWN_S = 20.0       # no reinyectar hasta que pasen 20s o se libere busy
+
 _POLL_S = 4.0
 _TITLE_RE = re.compile(r"\((\d+)\)")
+
+
+def set_busy(value: bool) -> None:
+    """whatsapp.py llama esto al entrar/salir de read y send para que el
+    watcher no dispare mientras JARVIS está operando la interfaz."""
+    global _busy_since
+    if value:
+        _busy.set()
+        _busy_since = time.time()
+    else:
+        _busy.clear()
+        _busy_since = 0.0
+
+
+def is_busy() -> bool:
+    # Auto-expirar: si lleva demasiado tiempo busy (Gemini no respondió o
+    # falló sin liberar), desbloquear solo para no paralizar el watcher.
+    if _busy.is_set() and _busy_since and (time.time() - _busy_since) > _BUSY_MAX_S:
+        _busy.clear()
+        return False
+    return _busy.is_set()
 
 
 def _get_whatsapp_unread() -> int:
@@ -107,10 +138,17 @@ def _notify_gemini(unread: int):
 
 
 def _loop():
-    global _active
+    global _active, _last_notify_ts
     consecutive_fail = 0
     while _active and not _stop.is_set():
         try:
+            # PAUSA si JARVIS está operando WhatsApp (leyendo/respondiendo).
+            # No tocar last_unread mientras tanto: el send hace reset_baseline()
+            # al terminar, que re-sincroniza el contador correctamente.
+            if is_busy():
+                _stop.wait(_POLL_S)
+                continue
+
             # Respetar kill switch y focus
             try:
                 from core.autonomy import is_killed
@@ -131,8 +169,16 @@ def _loop():
             consecutive_fail = 0
 
             if unread > _state["last_unread"]:
-                _state["events"] += 1
-                _notify_gemini(unread)
+                # Cooldown: no reinyectar si la notificación anterior es muy
+                # reciente (Gemini todavía podría estar procesándola).
+                now = time.time()
+                if (now - _last_notify_ts) >= _NOTIFY_COOLDOWN_S:
+                    _state["events"] += 1
+                    _last_notify_ts = now
+                    _notify_gemini(unread)
+                    # Tras notificar, marcar busy hasta que el send lo libere
+                    # (o auto-expire a los 60s) — evita doble disparo.
+                    set_busy(True)
             _state["last_unread"] = unread
         except Exception:
             pass
