@@ -9,9 +9,13 @@ KEYS_FILE = BASE_DIR / "config" / "api_keys.json"
 
 def _load_keys() -> dict:
     try:
-        return json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(KEYS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 def _send_telegram(token: str, chat_id: str, text: str) -> str:

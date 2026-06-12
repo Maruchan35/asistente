@@ -12,13 +12,17 @@ import io
 API_FILE = Path("config/api_keys.json")
 
 def _load_config() -> dict:
-    """Loads configuration from config/api_keys.json."""
+    """Loads configuration from config/api_keys.json (descifra claves enc::)."""
     if not API_FILE.exists():
         return {}
     try:
-        return json.loads(API_FILE.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(API_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 def _capture_screen_base64(save_path: Path = None) -> str:
     """

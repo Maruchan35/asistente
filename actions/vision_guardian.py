@@ -29,9 +29,13 @@ def _load_config() -> dict:
     if not API_FILE.exists():
         return {}
     try:
-        return json.loads(API_FILE.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(API_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 def _load_state() -> dict:
     if not STATE_FILE.exists():

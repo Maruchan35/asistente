@@ -24,7 +24,11 @@ def _get_ocr_reader():
 def _get_api_keys() -> tuple[str, str]:
     if not API_FILE.exists(): return "", ""
     try:
-        data = json.loads(API_FILE.read_text(encoding="utf-8"))
+        try:
+            from core.secure_config import read_config
+            data = read_config()
+        except Exception:
+            data = json.loads(API_FILE.read_text(encoding="utf-8"))
         return data.get("gemini_api_key", ""), data.get("openrouter_api_key", "")
     except: return "", ""
 

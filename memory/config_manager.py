@@ -31,13 +31,17 @@ def is_configured() -> bool:
         return False
 
 def load_api_keys() -> dict[str, str]:
-    """Load configuration keys from JSON file."""
+    """Load configuration keys from JSON file (descifra claves enc::)."""
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        from core.secure_config import read_config
+        return read_config()
     except Exception:
-        return {}
+        try:
+            return json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
 
 def save_api_keys(keys: dict[str, str]) -> None:
     """Save configuration keys to JSON file."""

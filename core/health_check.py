@@ -27,7 +27,11 @@ def run_health_check() -> dict:
 
     # ── API key ───────────────────────────────────────────────────────────────
     try:
-        cfg = json.loads((_BASE / "config" / "api_keys.json").read_text(encoding="utf-8"))
+        try:
+            from core.secure_config import read_config
+            cfg = read_config()
+        except Exception:
+            cfg = json.loads((_BASE / "config" / "api_keys.json").read_text(encoding="utf-8"))
         key = cfg.get("gemini_api_key", "").strip()
         if not key or key.upper().startswith("YOUR_") or "AQUI" in key.upper():
             add("gemini_api_key", False, "falta o es placeholder")

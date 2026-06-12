@@ -8,9 +8,13 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 def _load_keys() -> dict:
-    p = BASE_DIR / "config" / "api_keys.json"
-    try: return json.loads(p.read_text(encoding="utf-8"))
-    except: return {}
+    try:
+        from core.secure_config import read_config
+        return read_config()
+    except Exception:
+        p = BASE_DIR / "config" / "api_keys.json"
+        try: return json.loads(p.read_text(encoding="utf-8"))
+        except: return {}
 
 def _screenshot_b64(region: tuple | None = None) -> str:
     """Take a screenshot and return base64-encoded JPEG."""
