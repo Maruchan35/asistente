@@ -833,19 +833,13 @@ class JarvisLive:
         except Exception as e:
             _jlog_error("No se pudo iniciar monitor de conectividad", exc=e)
 
-        # ── Cifrar API keys en texto plano (una vez, silencioso) ─────────────
-        try:
-            from core.secure_config import encrypt_file, status as _sec_status
-            _st = _sec_status()
-            if _st.get("plaintext", 0) > 0 and _st.get("crypto_available"):
-                _res = encrypt_file()
-                if _res.get("ok") and _res.get("encrypted"):
-                    _jlog_info(f"API keys cifradas ({_res['encrypted']} valores)", category="system")
-                    # Invalidar cache para releer descifrado
-                    global _cached_api_key
-                    _cached_api_key = None
-        except Exception as e:
-            _jlog_warn(f"Cifrado de keys falló: {e}")
+        # ── Cifrado de API keys: DESACTIVADO automáticamente ─────────────────
+        # El cifrado auto al arrancar causó dos caídas graves (la API key se
+        # cifraba y al reiniciar no descifraba → "API key not valid"). Las
+        # claves quedan en TEXTO PLANO; ya están protegidas de git por
+        # .gitignore, que es el riesgo real. El cifrado sigue disponible
+        # MANUALMENTE vía la herramienta secure_config_tool si el usuario lo
+        # pide explícitamente (ahora con keyfile estable, no MAC).
 
         # ── Health check al arrancar (background, no bloquea) ────────────────
         def _health_bg():
