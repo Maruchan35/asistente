@@ -249,6 +249,77 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
             time.sleep(1.5)
         return True
 
+def _generate_tts_audio(text: str) -> "Path | None":
+    """Generar un archivo de audio MP3 con voz natural a partir de texto.
+    Prefiere edge-tts (voz neural), cae a gTTS. Devuelve la ruta del .mp3."""
+    import tempfile
+    out = Path(tempfile.gettempdir()) / f"jarvis_wa_voice_{int(time.time())}.mp3"
+
+    # 1. edge-tts (voz neural española, suena natural)
+    try:
+        import asyncio
+        import edge_tts
+        async def _gen():
+            communicate = edge_tts.Communicate(text, "es-MX-DaliaNeural")
+            await communicate.save(str(out))
+        try:
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(_gen())
+            loop.close()
+        except RuntimeError:
+            asyncio.run(_gen())
+        if out.exists() and out.stat().st_size > 500:
+            return out
+    except Exception as e:
+        print(f"[WhatsApp] edge-tts falló: {e}")
+
+    # 2. Fallback gTTS
+    try:
+        from gtts import gTTS
+        gTTS(text=text, lang="es").save(str(out))
+        if out.exists() and out.stat().st_size > 500:
+            return out
+    except Exception as e:
+        print(f"[WhatsApp] gTTS falló: {e}")
+
+    return None
+
+
+def _send_file_via_attach(fp: "Path", caption: str, player, target_desc: str) -> bool:
+    """Enviar un archivo por el botón adjuntar (📎 → Documento → ruta).
+    Reutilizable por send_document y send_audio. Devuelve True si lo envió."""
+    if not pyautogui:
+        return False
+    try:
+        coords_file = BASE_DIR / "config" / "whatsapp_coords.json"
+        attach_x, attach_y = 702, 979
+        doc_x, doc_y = 707, 601
+        if coords_file.exists():
+            try:
+                _c = json.loads(coords_file.read_text(encoding="utf-8"))
+                attach_x = _c["attach_button"]["x"]; attach_y = _c["attach_button"]["y"]
+                doc_x = _c["document_item"]["x"]; doc_y = _c["document_item"]["y"]
+            except Exception:
+                pass
+        pyautogui.click(attach_x + 300, attach_y); time.sleep(0.5)
+        pyautogui.click(attach_x, attach_y); time.sleep(1.5)
+        pyautogui.click(doc_x, doc_y); time.sleep(1.8)
+        pyautogui.hotkey("ctrl", "a"); time.sleep(0.3)
+        try:
+            import pyperclip
+            pyperclip.copy(str(fp)); pyautogui.hotkey("ctrl", "v")
+        except Exception:
+            pyautogui.write(str(fp), interval=0.03)
+        time.sleep(0.4); pyautogui.press("enter"); time.sleep(3.5)
+        if caption:
+            _paste_text(caption, player); time.sleep(0.3)
+        pyautogui.press("enter"); time.sleep(1.5)
+        return True
+    except Exception as e:
+        print(f"[WhatsApp] _send_file_via_attach falló: {e}")
+        return False
+
+
 def _resolve_phone(receiver: str, contacts: dict) -> tuple[str, str]:
     """Devuelve (phone, contact_name) dado un receiver."""
     cleaned  = "".join(c for c in receiver if c.isdigit() or c == "+")
@@ -281,11 +352,12 @@ def whatsapp(parameters: dict, player=None) -> str:
     # Aliases
     if action == "send_text":  action = "send"
     if action in ("read_unread", "read_chat", "unread"): action = "read"
+    if action in ("send_voice", "voice_note", "audio"): action = "send_audio"
 
     # Pausar el watcher mientras operamos la UI de WhatsApp (read/send/captions/
     # close_chat usan pyautogui+visión 10-20s). Sin esto, el watcher dispara
     # turnos encima y todo se congela. Se libera SIEMPRE en el finally.
-    _ui_actions = ("send", "send_image", "send_document", "read", "close_chat")
+    _ui_actions = ("send", "send_image", "send_document", "send_audio", "read", "close_chat")
     _watch_paused = False
     if action in _ui_actions:
         try:
@@ -332,7 +404,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
         return "Contactos:\n" + "\n".join(f"• {v['name']}: {v['phone']}" for v in contacts.values())
 
     # ── ENVÍO ─────────────────────────────────────────────────────────────────
-    elif action in ("send", "send_image", "send_document"):
+    elif action in ("send", "send_image", "send_document", "send_audio"):
         if not receiver:
             return "Error: Falta el destinatario ('receiver')."
         if not pyautogui:
@@ -527,6 +599,61 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
                 f"Abrí WhatsApp Web, presioná el botón 📎, elegí 'Documento' "
                 f"y seleccioná el archivo desde: {fp}"
             )
+
+        # ── ENVIAR AUDIO / NOTA DE VOZ ────────────────────────────────────
+        elif action == "send_audio":
+            audio_path = parameters.get("audio_path", "").strip()
+            text       = parameters.get("text", message).strip()
+            fp = None
+
+            if audio_path:
+                # Enviar un archivo de audio existente
+                fp = _resolve_file_path(audio_path)
+                if not fp.exists() or not fp.is_file():
+                    return f"Error: no se encontró el audio en '{audio_path}'."
+            elif text:
+                # Generar audio TTS del texto (voz natural con edge-tts)
+                if player:
+                    try: player.write_log(f"🎙️ Generando audio de voz para {target_desc}...")
+                    except: pass
+                fp = _generate_tts_audio(text)
+                if fp is None:
+                    return ("No pude generar el audio de voz (edge-tts/gtts no "
+                            "disponibles). Instala con: pip install edge-tts")
+            else:
+                return "Error: para send_audio indica 'text' (se convierte a voz) o 'audio_path'."
+
+            # Reusar el flujo de adjuntar como documento — WhatsApp reproduce
+            # los .mp3/.ogg inline como audio.
+            if player:
+                try: player.write_log(f"🎙️ Enviando audio a {target_desc}...")
+                except: pass
+
+            sent = _send_file_via_attach(fp, "", player, target_desc)
+            # Limpiar el TTS temporal
+            if not audio_path:
+                try: fp.unlink(missing_ok=True)
+                except Exception: pass
+
+            if sent:
+                # Guardar en memoria de conversación
+                try:
+                    from core.wa_memory import log_message
+                    log_message(target_desc, "Yo (JARVIS)",
+                                f"[audio de voz] {text[:80]}" if text else "[audio]")
+                except Exception:
+                    pass
+                # Modo conversación: cerrar chat tras responder
+                try:
+                    from actions.whatsapp_watch import is_converse_active, reset_baseline
+                    if is_converse_active():
+                        time.sleep(0.5); pyautogui.press("escape"); time.sleep(0.5)
+                        reset_baseline()
+                except Exception:
+                    pass
+                return f"Audio enviado a '{target_desc}' por WhatsApp."
+            return (f"No pude enviar el audio automáticamente a '{target_desc}'. "
+                    f"Archivo generado en: {fp}")
 
     # ── LEER ─────────────────────────────────────────────────────────────────
     elif action == "read":

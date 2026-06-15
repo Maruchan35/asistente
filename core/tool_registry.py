@@ -209,7 +209,7 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":     {"type": "STRING",  "description": "send | send_image | send_document | read | unread | add_contact | list_contacts | delete_contact"},
+                "action":     {"type": "STRING",  "description": "send | send_image | send_document | send_audio (texto a voz o archivo) | read | unread | add_contact | list_contacts | delete_contact"},
                 "receiver":   {"type": "STRING",  "description": "Nombre del contacto o número de teléfono con código de país (ej: 5215512345678)"},
                 "message":    {"type": "STRING",  "description": "Texto del mensaje a enviar (para action=send)"},
                 "image_path": {"type": "STRING",  "description": "Ruta de la imagen (para action=send_image). Ej: 'desktop/foto.png'"},
