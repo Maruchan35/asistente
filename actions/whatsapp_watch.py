@@ -105,8 +105,11 @@ def _notify_gemini(unread: int):
                 f"2) responde con whatsapp action=send receiver='{contact}' "
                 "manteniendo contexto y tono del chat (el chat se cierra solo "
                 "tras enviar, para poder detectar el siguiente mensaje); "
-                "3) si decides NO responder, llama whatsapp action=close_chat; "
-                "4) NO avises al usuario por voz salvo mensaje importante.)"
+                "3) si decides NO responder, llama whatsapp action=close_chat. "
+                "NUNCA llames whatsapp_watch stop ni des por 'concluida' la "
+                "conversación — sigue vigilando indefinidamente hasta que el "
+                "USUARIO te diga que pares. Aunque el contacto se despida, "
+                "puede volver a escribir.)"
             )
         else:
             msg = (
@@ -215,11 +218,27 @@ def whatsapp_watch(parameters: dict, player=None, speak=None) -> str:
     if action == "stop":
         if not _active:
             return "El watcher de WhatsApp no estaba activo."
+        # GUARD: en modo conversación, JARVIS NO puede detener la vigilancia por
+        # su cuenta (tendía a "concluir" la charla tras una respuesta y apagar
+        # el watcher, dejando sin contestar los siguientes mensajes). Solo el
+        # USUARIO puede detenerla → exige confirmación explícita.
+        user_requested = parameters.get("user_requested", parameters.get("confirmed", False))
+        if isinstance(user_requested, str):
+            user_requested = user_requested.lower() in ("true", "1", "yes", "sí", "si")
+        if _state.get("mode") == "converse" and not user_requested:
+            return ("NO detengas la conversación autónoma por tu cuenta. El modo "
+                    "conversación sigue ACTIVO hasta que el USUARIO lo pida "
+                    "explícitamente ('deja de responder', 'detén el chat'). "
+                    "Aunque creas que la charla 'concluyó', el contacto puede "
+                    "escribir de nuevo y debes seguir respondiendo. "
+                    "Si el usuario SÍ lo pidió, vuelve a llamar con user_requested=true.")
         _active = False
         _stop.set()
+        set_busy(False)
         try:
             from core.autonomy import audit
-            audit("whatsapp_watch", "Watcher detenido", f"{_state['events']} eventos detectados")
+            audit("whatsapp_watch", "Watcher detenido por el usuario",
+                  f"{_state['events']} eventos detectados")
         except Exception:
             pass
         return (f"Vigilancia de WhatsApp detenida ({_state['events']} mensajes "

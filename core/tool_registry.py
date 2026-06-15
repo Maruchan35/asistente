@@ -2192,7 +2192,9 @@ TOOL_DECLARATIONS = [
                 "contact": {"type": "STRING",
                             "description": "Contacto objetivo para modo converse (vacio = cualquiera)"},
                 "mode": {"type": "STRING", "enum": ["notify", "converse"],
-                         "description": "notify = solo avisar al usuario | converse = leer y responder solo"}
+                         "description": "notify = solo avisar al usuario | converse = leer y responder solo"},
+                "user_requested": {"type": "BOOLEAN",
+                         "description": "Para action=stop en modo converse: true SOLO si el USUARIO pidio explicitamente detener la conversacion. NUNCA detengas el modo converse por tu cuenta."}
             },
             "required": ["action"]
         }

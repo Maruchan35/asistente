@@ -40,11 +40,35 @@ _ENCRYPTED_FIELDS = {
 _SENSITIVE_HINTS = ("key", "token", "secret", "password", "credential")
 
 
+_KEYFILE = _BASE / "config" / ".jarvis_key"
+
+
 def _machine_key() -> bytes:
-    """Clave Fernet derivada de identificadores de la máquina."""
-    seed = f"{os.environ.get('COMPUTERNAME','')}|{os.environ.get('USERNAME','')}|{uuid.getnode()}|jarvis-v1"
-    digest = hashlib.sha256(seed.encode("utf-8")).digest()
-    return base64.urlsafe_b64encode(digest)
+    """Clave Fernet ESTABLE almacenada en un keyfile local (gitignored).
+
+    ANTES usaba uuid.getnode() (el MAC), que es INESTABLE: devuelve un MAC
+    distinto en cada arranque si hay varias interfaces de red (WiFi, VPN,
+    adaptadores virtuales). Eso causó dos caídas — la clave se cifraba con un
+    MAC y al reiniciar no descifraba porque getnode() devolvía otro → "API key
+    not valid". Ahora la clave de cifrado se genera UNA vez y se guarda en
+    config/.jarvis_key, estable entre reinicios y fuera de git."""
+    try:
+        if _KEYFILE.exists():
+            data = _KEYFILE.read_bytes().strip()
+            if len(data) >= 44:   # una clave Fernet válida tiene 44 bytes b64
+                return data
+        # Generar una nueva clave estable y persistirla
+        from cryptography.fernet import Fernet
+        new_key = Fernet.generate_key()
+        _KEYFILE.parent.mkdir(parents=True, exist_ok=True)
+        _KEYFILE.write_bytes(new_key)
+        return new_key
+    except Exception:
+        # Último recurso: clave derivada SOLO de usuario+hostname (sin MAC).
+        # Estable aunque menos única; mejor que romper.
+        seed = f"{os.environ.get('COMPUTERNAME','')}|{os.environ.get('USERNAME','')}|jarvis-stable-v2"
+        digest = hashlib.sha256(seed.encode("utf-8")).digest()
+        return base64.urlsafe_b64encode(digest)
 
 
 def _is_sensitive(field: str) -> bool:
