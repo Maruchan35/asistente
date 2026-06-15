@@ -2501,11 +2501,18 @@ class JarvisLive:
         except Exception as e:
             msg  = str(e)
             code = getattr(e, "status_code", 0) or getattr(e, "code", 0) or 0
-            # Detect 1011 (internal server error) regardless of exception type
+            # Errores CONOCIDOS de la API Live que se auto-recuperan en la
+            # reconexión → mensaje limpio de UNA línea, sin traceback asustador.
             if code == 1011 or "1011" in msg or "Internal error" in msg:
                 tool_info = f" durante '{_last_tool}'" if _last_tool else ""
                 print(f"[JARVIS] ⚡ API 1011{tool_info} — reconectando...")
                 self._api_1011_tool = _last_tool
+            elif "1008" in msg or "Requested entity was not found" in msg or "policy violation" in msg.lower():
+                # Modelo Live preview momentáneamente no disponible — transitorio
+                print("[JARVIS] ⚠️ Modelo Live no disponible un instante — reconectando...")
+            elif "1000" in msg or "going away" in msg.lower():
+                # Cierre normal (~15 min de sesión) — silencioso
+                print("[JARVIS] 🔄 Sesión expirada — reconectando...")
             else:
                 print(f"[JARVIS] ❌ Recv: {e}")
                 traceback.print_exc()
