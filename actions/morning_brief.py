@@ -102,7 +102,7 @@ def morning_brief(parameters: dict = None, player=None) -> str:
 
     if player:
         try: player.write_log(f"☀️ Brief matutino entregado.")
-        except: pass
+        except Exception: pass
 
     # Registrar que ya se dio el brief hoy
     try:

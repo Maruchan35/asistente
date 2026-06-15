@@ -202,7 +202,7 @@ def browser_control(parameters: dict, player=None) -> str:
 
         if player:
             try: player.write_log(f"⏩ Adelantando {seconds}s en el video...")
-            except: pass
+            except Exception: pass
 
         if _is_youtube(win):
             # En YouTube: L adelanta 10s
@@ -234,7 +234,7 @@ def browser_control(parameters: dict, player=None) -> str:
 
         if player:
             try: player.write_log(f"⏪ Retrocediendo {seconds}s en el video...")
-            except: pass
+            except Exception: pass
 
         if _is_youtube(win):
             presses = max(1, round(seconds / 10))
@@ -257,7 +257,7 @@ def browser_control(parameters: dict, player=None) -> str:
     elif action == "media_play_pause":
         if player:
             try: player.write_log("⏯ Play/Pause...")
-            except: pass
+            except Exception: pass
         if _is_youtube(win):
             pyautogui.press("k")
         else:
@@ -268,7 +268,7 @@ def browser_control(parameters: dict, player=None) -> str:
     elif action == "media_mute":
         if player:
             try: player.write_log("🔇 Mute/Unmute...")
-            except: pass
+            except Exception: pass
         if _is_youtube(win):
             pyautogui.press("m")
         else:
@@ -279,7 +279,7 @@ def browser_control(parameters: dict, player=None) -> str:
     elif action == "media_fullscreen":
         if player:
             try: player.write_log("🔲 Pantalla completa...")
-            except: pass
+            except Exception: pass
         if _is_youtube(win):
             pyautogui.press("f")
         else:

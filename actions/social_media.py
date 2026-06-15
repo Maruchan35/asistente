@@ -12,7 +12,7 @@ KEYS_FILE = BASE_DIR / "config" / "api_keys.json"
 
 def _load_keys() -> dict:
     try: return json.loads(KEYS_FILE.read_text(encoding="utf-8"))
-    except: return {}
+    except Exception: return {}
 
 def _ps(cmd: str) -> str:
     try:

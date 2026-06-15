@@ -546,9 +546,14 @@ def t_whatsapp_watch():
     ww._notify_gemini(2)
     assert notifications and "WHATSAPP WATCHER" in notifications[-1]
     assert "action=read" in notifications[-1]
-    r2 = ww.whatsapp_watch({"action": "stop"})
-    assert "detenida" in r2.lower()
-    return "parser + lifecycle + notify OK"
+    # GUARD: en converse, stop SIN user_requested debe ser RECHAZADO (JARVIS no
+    # puede apagar la conversación por su cuenta) — el watcher sigue activo.
+    r_reject = ww.whatsapp_watch({"action": "stop"})
+    assert "NO detengas" in r_reject and ww._active, "el guard anti-stop falló"
+    # Solo el usuario (user_requested) puede detener de verdad.
+    r2 = ww.whatsapp_watch({"action": "stop", "user_requested": True})
+    assert "detenida" in r2.lower() and not ww._active
+    return "parser + lifecycle + notify + guard anti-stop OK"
 
 
 # ── E2E: cifrado de config ───────────────────────────────────────────────────

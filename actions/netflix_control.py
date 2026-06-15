@@ -91,13 +91,13 @@ def _focus_or_open_netflix(profile: str, player=None) -> bool:
     if win:
         if player:
             try: player.write_log("🎬 Netflix ya abierto — enfocando...")
-            except: pass
+            except Exception: pass
         _focus_window(win)
         return True
 
     if player:
         try: player.write_log("🎬 Abriendo Netflix...")
-        except: pass
+        except Exception: pass
     # Abrir la raíz de Netflix — él solo redirige a login o selección de perfiles
     webbrowser.open("https://www.netflix.com")
     time.sleep(11)  # esperar carga completa
@@ -119,7 +119,7 @@ def _visual_click(description: str, player=None, post_wait: float = 1.5) -> bool
     except Exception as e:
         if player:
             try: player.write_log(f"⚠️ visual_click falló: {e}")
-            except: pass
+            except Exception: pass
         return False
 
 # ── Paso 1: Seleccionar perfil ────────────────────────────────────────────────
@@ -132,7 +132,7 @@ def _select_profile(profile_name: str, player=None) -> bool:
     """
     if player:
         try: player.write_log(f"👤 Buscando perfil '{profile_name}'...")
-        except: pass
+        except Exception: pass
 
     # Verificar si la pantalla de selección de perfiles está visible
     on_profile_screen = _is_on_profile_screen()
@@ -140,7 +140,7 @@ def _select_profile(profile_name: str, player=None) -> bool:
     if not on_profile_screen:
         if player:
             try: player.write_log("ℹ️ Pantalla de perfiles no detectada — ya en el home de Netflix.")
-            except: pass
+            except Exception: pass
         return True  # Ya estamos dentro, no hace falta seleccionar
 
     # Intentar varias descripciones del mismo elemento
@@ -155,12 +155,12 @@ def _select_profile(profile_name: str, player=None) -> bool:
             time.sleep(4.5)  # esperar carga del home de Netflix
             if player:
                 try: player.write_log(f"✅ Perfil '{profile_name}' seleccionado.")
-                except: pass
+                except Exception: pass
             return True
 
     if player:
         try: player.write_log(f"⚠️ No encontré el perfil '{profile_name}' — continuando de todas formas.")
-        except: pass
+        except Exception: pass
     return False
 
 # ── Paso 2: Buscar contenido ──────────────────────────────────────────────────
@@ -171,7 +171,7 @@ def _search_netflix(content: str, player=None) -> bool:
     """
     if player:
         try: player.write_log(f"🔍 Buscando '{content}' en Netflix...")
-        except: pass
+        except Exception: pass
 
     query_url = f"https://www.netflix.com/search?q={urllib.parse.quote(content)}"
 
@@ -192,7 +192,7 @@ def _search_netflix(content: str, player=None) -> bool:
     except Exception as e:
         if player:
             try: player.write_log(f"⚠️ Error buscando: {e}")
-            except: pass
+            except Exception: pass
         return False
 
 # ── Paso 3: Clic en primer resultado ──────────────────────────────────────────
@@ -201,7 +201,7 @@ def _click_first_result(content: str, player=None) -> bool:
     """Hace clic en la primera card de resultado de búsqueda."""
     if player:
         try: player.write_log(f"🎯 Abriendo '{content}'...")
-        except: pass
+        except Exception: pass
 
     attempts = [
         f"primera tarjeta o miniatura de {content}",
@@ -220,14 +220,14 @@ def _click_play(player=None) -> bool:
     """Hace clic en el botón Reproducir o Play."""
     if player:
         try: player.write_log("▶ Buscando botón de Reproducir...")
-        except: pass
+        except Exception: pass
 
     # Intentar con distintas descripciones en español e inglés
     for desc in ["botón Reproducir", "botón Play", "Reproducir", "Play", "Reanudar"]:
         if _visual_click(desc, player=player, post_wait=1.5):
             if player:
                 try: player.write_log("✅ ¡Reproduciendo!")
-                except: pass
+                except Exception: pass
             return True
 
     # Fallback: tecla espacio (muchos reproductores lo aceptan)

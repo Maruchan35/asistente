@@ -30,7 +30,7 @@ def _get_api_keys() -> tuple[str, str]:
         except Exception:
             data = json.loads(API_FILE.read_text(encoding="utf-8"))
         return data.get("gemini_api_key", ""), data.get("openrouter_api_key", "")
-    except: return "", ""
+    except Exception: return "", ""
 
 def visual_click(parameters: dict, player=None) -> str:
     """

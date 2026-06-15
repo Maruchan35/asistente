@@ -14,7 +14,7 @@ def _load_keys() -> dict:
     except Exception:
         p = BASE_DIR / "config" / "api_keys.json"
         try: return json.loads(p.read_text(encoding="utf-8"))
-        except: return {}
+        except Exception: return {}
 
 def _screenshot_b64(region: tuple | None = None) -> str:
     """Take a screenshot and return base64-encoded JPEG."""

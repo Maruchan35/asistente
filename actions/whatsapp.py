@@ -85,7 +85,7 @@ def _paste_text(text: str, player=None) -> bool:
         # Fallback: escribir directo (puede fallar con acentos, pero mejor que nada)
         if player:
             try: player.write_log(f"⚠️ Portapapeles falló ({e}), tecleando directo")
-            except: pass
+            except Exception: pass
         try:
             pyautogui.write(text, interval=0.02)
             return True
@@ -177,7 +177,7 @@ def _open_whatsapp_web_once(url: str = "https://web.whatsapp.com", player=None) 
     if now - _last_open_ts < 30:
         if player:
             try: player.write_log("⏳ WhatsApp ya se está abriendo — esperando carga...")
-            except: pass
+            except Exception: pass
         return False
     _last_open_ts = now
     webbrowser.open(url)
@@ -195,12 +195,12 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
     if wsp_window:
         if player:
             try: player.write_log(f"💬 Navegando en pestaña WhatsApp abierta → {target_desc}")
-            except: pass
+            except Exception: pass
         try:
             if wsp_window.isMinimized:
                 wsp_window.restore()
             wsp_window.activate()
-        except: pass
+        except Exception: pass
         time.sleep(1)
 
         # Buscar contacto con Ctrl+Alt+/
@@ -223,7 +223,7 @@ def _navigate_to_contact(phone: str, receiver: str, target_desc: str,
 
         if player:
             try: player.write_log(f"💬 Abriendo WhatsApp Web → {target_desc}")
-            except: pass
+            except Exception: pass
 
         opened = _open_whatsapp_web_once(url, player)
         if not opened:
@@ -431,7 +431,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
             time.sleep(0.8)
             if player:
                 try: player.write_log(f"✅ Mensaje enviado a {target_desc}")
-                except: pass
+                except Exception: pass
 
             # Guardar la respuesta en memoria de conversaciones (consultable luego:
             # "¿qué le dijiste a Juan?")
@@ -496,7 +496,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
             time.sleep(1.0)
             if player:
                 try: player.write_log(f"✅ Imagen enviada a {target_desc}")
-                except: pass
+                except Exception: pass
             return f"Imagen enviada a '{target_desc}' vía WhatsApp."
 
         # ── ENVIAR DOCUMENTO ──────────────────────────────────────────────
@@ -510,7 +510,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
 
             if player:
                 try: player.write_log(f"📎 Enviando documento '{fp.name}' a {target_desc}...")
-                except: pass
+                except Exception: pass
 
             # ── MÉTODO PRINCIPAL: Botón 📎 → Document → Diálogo de Windows ───
             try:
@@ -573,7 +573,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
 
                 if player:
                     try: player.write_log(f"✅ Documento '{fp.name}' enviado a {target_desc}")
-                    except: pass
+                    except Exception: pass
                 return f"Documento '{fp.name}' enviado a '{target_desc}' vía WhatsApp."
 
             except Exception as e_m2:
@@ -615,7 +615,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
                 # Generar audio TTS del texto (voz natural con edge-tts)
                 if player:
                     try: player.write_log(f"🎙️ Generando audio de voz para {target_desc}...")
-                    except: pass
+                    except Exception: pass
                 fp = _generate_tts_audio(text)
                 if fp is None:
                     return ("No pude generar el audio de voz (edge-tts/gtts no "
@@ -627,7 +627,7 @@ def _whatsapp_impl(parameters: dict, player, action: str, receiver: str) -> str:
             # los .mp3/.ogg inline como audio.
             if player:
                 try: player.write_log(f"🎙️ Enviando audio a {target_desc}...")
-                except: pass
+                except Exception: pass
 
             sent = _send_file_via_attach(fp, "", player, target_desc)
             # Limpiar el TTS temporal

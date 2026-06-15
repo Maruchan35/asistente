@@ -153,7 +153,7 @@ def web_search(parameters: dict, player=None) -> str:
 
     if player:
         try: player.write_log(f"🔍 Buscando: '{query}'...")
-        except: pass
+        except Exception: pass
 
     # ── Modo comparación ──────────────────────────────────────────────────────
     if mode == "compare":
@@ -170,7 +170,7 @@ def web_search(parameters: dict, player=None) -> str:
     except Exception as e:
         if player:
             try: player.write_log(f"⚠️ DDG Instant falló: {e} — intentando Lite...")
-            except: pass
+            except Exception: pass
 
     # ── Intento 2: Lite scraping con citas estructuradas ─────────────────────
     if not results_text or with_citations:
@@ -192,7 +192,7 @@ def web_search(parameters: dict, player=None) -> str:
         except Exception as e:
             if player:
                 try: player.write_log(f"⚠️ DDG Lite falló: {e} — abriendo navegador...")
-                except: pass
+                except Exception: pass
 
     # ── Fallback: abrir navegador ────────────────────────────────────────────
     if not results_text:
@@ -205,5 +205,5 @@ def web_search(parameters: dict, player=None) -> str:
     final = f"Resultados de búsqueda para '{query}':\n\n{results_text}"
     if player:
         try: player.write_log(f"✅ Búsqueda completada ({len(results_text)} chars)")
-        except: pass
+        except Exception: pass
     return final

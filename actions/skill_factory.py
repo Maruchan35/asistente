@@ -230,7 +230,7 @@ def skill_factory(parameters: dict, player=None) -> str:
             return "¿Qué habilidad necesitas que cree? Descríbeme qué debe hacer."
         if player:
             try: player.write_log(f"🛠️ Diseñando habilidad: {desc[:50]}")
-            except: pass
+            except Exception: pass
         design = _design(desc, parameters.get("name", ""))
         if not design.get("ok"):
             return f"No pude diseñar la habilidad: {design.get('reason')}"

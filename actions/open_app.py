@@ -177,7 +177,7 @@ def open_app(parameters: dict, response=None, player=None) -> str:
                      f"abrí la versión web en tu navegador.")
                 if player:
                     try: player.write_log(f"🌐 {m}")
-                    except: pass
+                    except Exception: pass
                 return m
             if app_lower in BROWSER_NAMES:
                 webbrowser.open("https://www.google.com")
@@ -185,7 +185,7 @@ def open_app(parameters: dict, response=None, player=None) -> str:
                      "predeterminado en su lugar.")
                 if player:
                     try: player.write_log(f"🌐 {m}")
-                    except: pass
+                    except Exception: pass
                 return m
             return None
 

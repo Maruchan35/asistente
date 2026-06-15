@@ -841,21 +841,37 @@ class JarvisLive:
         # MANUALMENTE vía la herramienta secure_config_tool si el usuario lo
         # pide explícitamente (ahora con keyfile estable, no MAC).
 
-        # ── Health check al arrancar (background, no bloquea) ────────────────
+        # ── Self-check de integridad (AST, rápido) + Health check ────────────
         def _health_bg():
+            problems = []
+            # 1. Integridad estructural: tools consistentes + lectores de keys OK
+            try:
+                from core.startup_check import run_startup_check
+                _chk = run_startup_check(verbose=True)
+                if not _chk["ok"]:
+                    problems.extend(_chk["problems"])
+            except Exception as e:
+                print(f"[STARTUP-CHECK] no se pudo ejecutar: {e}")
+            # 2. Health de runtime: API key, mic, disco, errores recientes
             try:
                 from core.health_check import print_health_report
                 report = print_health_report()
                 if not report["ok"]:
-                    # Avisar por voz en cuanto haya sesión
-                    import time as _t
-                    _t.sleep(8)   # esperar a que conecte
-                    self._inject_context(
-                        f"(Health check del arranque encontró problemas: {report['summary']}. "
-                        "Méncionalo brevemente si el usuario pregunta por el estado del sistema.)"
-                    )
+                    problems.append(report["summary"])
             except Exception:
                 pass
+            # Avisar por voz si hubo problemas (tras conectar)
+            if problems:
+                try:
+                    import time as _t
+                    _t.sleep(8)
+                    self._inject_context(
+                        "(El chequeo de arranque encontró problemas: "
+                        + " | ".join(problems[:3])
+                        + ". Méncionalo SOLO si el usuario pregunta por el estado del sistema.)"
+                    )
+                except Exception:
+                    pass
         threading.Thread(target=_health_bg, daemon=True, name="HealthCheck").start()
 
         _jlog_session("init_complete")
@@ -2163,6 +2179,14 @@ class JarvisLive:
         except Exception as e:
             result = f"Tool '{name}' failed: {e}"
             traceback.print_exc()
+            # Registrar en errors.jsonl ESTRUCTURADO con el nombre de la tool,
+            # para que self_heal._scan() pueda detectar fallos repetidos y
+            # ofrecer auto-reparación. Antes solo iba a consola (print_exc) →
+            # el círculo de self-healing quedaba ciego a los fallos de tools.
+            try:
+                _jlog_error(f"Tool '{name}' falló", exc=e, category="tool", tool=name)
+            except Exception:
+                pass
             self.speak_error(name, e)
 
         # Record action for habit learning (fire-and-forget, non-blocking)
