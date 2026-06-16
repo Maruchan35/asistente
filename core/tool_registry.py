@@ -2278,4 +2278,30 @@ TOOL_DECLARATIONS = [
         ),
         "parameters": {"type": "OBJECT", "properties": {}}
     },
+    {
+        "name": "teams_tasks",
+        "description": (
+            "Lee las tareas asignadas en Microsoft Teams, las lista, y HACE las "
+            "faciles (ensayos, investigaciones, resumenes, documentos) dejandolas "
+            "LISTAS en la carpeta Documentos/Tareas Teams — sin entregarlas, para "
+            "que el usuario las revise y suba. "
+            "action='scan': el usuario debe estar en la seccion 'Tareas/Assignments' "
+            "de Teams; JARVIS lee la pantalla con vision y extrae las tareas. "
+            "action='list': muestra las tareas guardadas y su estado. "
+            "action='do': hace UNA tarea (por index o title). "
+            "action='do_all_easy': hace TODAS las pendientes faciles. "
+            "Usar cuando el usuario diga: 'que tareas tengo en Teams', 'escanea mis "
+            "tareas', 'haz las tareas faciles', 'revisa Teams'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "action": {"type": "STRING", "enum": ["scan", "list", "do", "do_all_easy"],
+                           "description": "scan | list | do | do_all_easy"},
+                "index": {"type": "INTEGER", "description": "Para do: numero de la tarea (1-based)"},
+                "title": {"type": "STRING", "description": "Para do: parte del titulo de la tarea"}
+            },
+            "required": ["action"]
+        }
+    },
 ]

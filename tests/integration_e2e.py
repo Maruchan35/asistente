@@ -637,6 +637,41 @@ def t_skill_factory_validate():
     return "validaciones de seguridad OK"
 
 
+def t_teams_tasks():
+    """Parser de tareas de Teams + persistencia + clasificación (sin tocar
+    Teams real ni el LLM — solo la lógica estructural)."""
+    from actions import teams_tasks as tt
+    # Parseo de la salida de visión simulada
+    fake_vision = (
+        "TAREA|||Ensayo sobre la IA|||Filosofía|||15 jun|||Escribe 2 páginas\n"
+        "TAREA|||Subir foto del experimento|||Química|||16 jun|||Foto del laboratorio\n"
+        "basura que no es tarea"
+    )
+    import actions.screen_vision as sv
+    orig = sv.screen_vision
+    sv.screen_vision = lambda *a, **k: fake_vision
+    # parchar también la referencia dentro de teams_tasks._scan (import local)
+    try:
+        parsed = tt._scan()
+    finally:
+        sv.screen_vision = orig
+    assert len(parsed) == 2, f"esperaba 2 tareas, got {len(parsed)}"
+    assert parsed[0]["titulo"] == "Ensayo sobre la IA"
+    assert parsed[0]["materia"] == "Filosofía"
+    # merge + persistencia
+    merged = tt._merge_tasks(parsed)
+    assert any(t["titulo"] == "Ensayo sobre la IA" for t in merged)
+    assert all("estado" in t for t in merged)
+    # _safe_filename
+    assert tt._safe_filename("Ensayo: ¿IA?") == "Ensayo_IA"
+    # limpiar store de prueba
+    try:
+        tt._STORE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return f"parser {len(parsed)} tareas + merge + filename OK"
+
+
 TESTS = {
     "memory_e2e":              t_memory_e2e,
     "document_creator_full":   t_document_creator_full,
@@ -669,6 +704,7 @@ TESTS = {
     "offline_mode":            t_offline_mode,
     "goals_nudges":            t_goals_nudges,
     "skill_factory_validate":  t_skill_factory_validate,
+    "teams_tasks":             t_teams_tasks,
 }
 
 

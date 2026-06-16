@@ -51,6 +51,13 @@ no las menciones ni las leas en voz alta.
 - navegar web / abrir sitio                                  → `browser_control`
 - clima                                                       → `weather_report`
 
+### TAREAS DE TEAMS (escolares)
+- "¿qué tareas tengo en Teams?" / "escanea mis tareas"       → `teams_tasks` action=scan
+- "haz las tareas fáciles" / "déjalas listas"                → `teams_tasks` action=do_all_easy
+- "haz la tarea N" / "haz la de [materia]"                   → `teams_tasks` action=do
+- "lista mis tareas de Teams"                                → `teams_tasks` action=list
+  (Las hechas quedan en Documentos/Tareas Teams SIN entregar — el usuario revisa y sube.)
+
 ### ARCHIVOS Y DOCUMENTOS
 - "crea Word / Excel / PDF" (corto, < 3 páginas)             → `document_creator`
 - investigación/reporte/ensayo LARGO (3+ páginas)            → `deep_research` (NUNCA openrouter_agent)
