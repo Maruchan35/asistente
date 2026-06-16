@@ -21,9 +21,17 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Rutas ─────────────────────────────────────────────────────────────────────
+# Los TESTS deben setear JARVIS_LOG_DIR a un tmpdir para NO contaminar los logs
+# de producción (antes los smoke tests metían "RuntimeError: dummy" en
+# logs/errors.jsonl real → health_check reportaba errores falsos y self_heal
+# veía ruido de prueba).
 _BASE  = Path(__file__).resolve().parent.parent
-_LOGS  = _BASE / "logs"
-_LOGS.mkdir(exist_ok=True)
+_LOGS  = Path(os.environ.get("JARVIS_LOG_DIR", str(_BASE / "logs")))
+try:
+    _LOGS.mkdir(parents=True, exist_ok=True)
+except Exception:
+    _LOGS = _BASE / "logs"
+    _LOGS.mkdir(exist_ok=True)
 
 _FILES = {
     "system":    _LOGS / "system.jsonl",
@@ -33,7 +41,7 @@ _FILES = {
     "quota":     _LOGS / "quota.jsonl",
     "session":   _LOGS / "sessions.jsonl",
 }
-_HUMAN = _BASE / "jarvis.log"
+_HUMAN = (_LOGS / "jarvis.log") if os.environ.get("JARVIS_LOG_DIR") else (_BASE / "jarvis.log")
 
 _lock = threading.Lock()
 

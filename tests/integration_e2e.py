@@ -19,12 +19,17 @@ Uso:
 """
 from __future__ import annotations
 import json
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# Aislar los logs de los tests para NO contaminar los de producción.
+os.environ["JARVIS_LOG_DIR"] = tempfile.mkdtemp(prefix="jarvis_test_logs_")
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"

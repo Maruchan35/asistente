@@ -21,10 +21,15 @@ import os
 import sys
 import time
 import traceback
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+# Aislar los logs de los tests para NO contaminar los de producción
+# (debe setearse ANTES de importar core.jarvis_logger en cualquier módulo).
+os.environ["JARVIS_LOG_DIR"] = tempfile.mkdtemp(prefix="jarvis_test_logs_")
 
 
 PASS = "[PASS]"
