@@ -28,6 +28,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# Consola Windows cp1252 no soporta emojis → UTF-8 con reemplazo.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # Aislar los logs de los tests para NO contaminar los de producción.
 os.environ["JARVIS_LOG_DIR"] = tempfile.mkdtemp(prefix="jarvis_test_logs_")
 
