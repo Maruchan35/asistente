@@ -25,12 +25,26 @@ def _get_weather() -> str:
 
 
 def _get_goals() -> list:
-    """Carga los objetivos activos."""
+    """Carga los objetivos ACTIVOS como lista de STRINGS.
+    goals.json ahora guarda objetos {text, status, ...}; antes eran strings.
+    Extraemos el texto de forma robusta para no romper el ', '.join() del brief
+    (causaba 'TypeError: expected str, dict found' → morning_brief en bucle)."""
     if not GOALS_PATH.exists():
         return []
     try:
         data = json.loads(GOALS_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
+        items = data if isinstance(data, list) else data.get("goals", [])
+        out = []
+        for g in items:
+            if isinstance(g, dict):
+                if g.get("status", "active") != "active":
+                    continue
+                txt = g.get("text") or g.get("titulo") or g.get("goal") or ""
+                if txt:
+                    out.append(str(txt))
+            elif isinstance(g, str) and g.strip():
+                out.append(g.strip())
+        return out
     except Exception:
         return []
 
@@ -83,7 +97,7 @@ def morning_brief(parameters: dict = None, player=None) -> str:
     goals = _get_goals()
     goals_str = ""
     if goals:
-        goals_str = f" Tiene {len(goals)} objetivo{'s' if len(goals) > 1 else ''} activo{'s' if len(goals) > 1 else ''}: {', '.join(goals[:3])}."
+        goals_str = f" Tiene {len(goals)} objetivo{'s' if len(goals) > 1 else ''} activo{'s' if len(goals) > 1 else ''}: {', '.join(str(g) for g in goals[:3])}."
     else:
         goals_str = " No hay objetivos activos en este momento."
 
@@ -91,7 +105,7 @@ def morning_brief(parameters: dict = None, player=None) -> str:
     reminders = _get_pending_reminders()
     reminders_str = ""
     if reminders:
-        reminders_str = f" Recordatorio{'s' if len(reminders) > 1 else ''} pendiente{'s' if len(reminders) > 1 else ''}: {', '.join(reminders)}."
+        reminders_str = f" Recordatorio{'s' if len(reminders) > 1 else ''} pendiente{'s' if len(reminders) > 1 else ''}: {', '.join(str(r) for r in reminders)}."
 
     brief = (
         f"Buenos días, señor. Son las {time_str} del {date_str}. "
