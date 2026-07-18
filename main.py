@@ -755,18 +755,16 @@ class JarvisLive:
         try:
             from core.proactive_engine import start_loop as _proactive_start
             def _on_proactive_suggestion(suggestion):
-                try:
-                    # No interrumpir si JARVIS está hablando o el usuario en turno
-                    if getattr(self, "_is_speaking", False) or getattr(self, "_is_transmitting_turn", False):
-                        return
-                    self._inject_text(
-                        f"(Sugerencia proactiva interna basada en patrones del usuario, score={suggestion.score}: "
-                        f"\"{suggestion.message}\" — usa esto solo si el momento es apropiado, "
-                        "y de manera breve. NO repitas la sugerencia si el usuario está claramente ocupado.)"
-                    )
-                except Exception:
-                    pass
-            _proactive_start(_on_proactive_suggestion, interval_s=900)   # cada 15min
+                # Vía el gate central: solo en nivel autonomía 3, sin cortar a
+                # JARVIS, con throttle. Es CONTEXTO silencioso, no una orden:
+                # el modelo lo menciona solo si de verdad viene al caso.
+                self._inject_autonomous(
+                    f"(Contexto interno — patrón de uso detectado: \"{suggestion.message}\". "
+                    "Solo MENCIÓNALO en una frase si el usuario no está ocupado. "
+                    "NUNCA ejecutes acciones por esto sin que el usuario lo confirme.)",
+                    min_gap_s=900, requires_level=3,
+                )
+            _proactive_start(_on_proactive_suggestion, interval_s=1800)  # cada 30min
             _jlog_info("Motor proactivo iniciado", category="system")
         except Exception as e:
             _jlog_error("No se pudo iniciar motor proactivo", exc=e)
@@ -902,6 +900,43 @@ class JarvisLive:
                 )
             except Exception:
                 pass
+
+    _last_autonomous_inject = 0.0
+
+    def _inject_autonomous(self, text: str, *, min_gap_s: float = 45.0,
+                           requires_level: int = 2) -> bool:
+        """Gate CENTRAL para inyecciones AUTÓNOMAS (proactivas, notificaciones,
+        vigilancia). Evita los dos problemas que reportó el usuario:
+          • 'se corta a sí misma': NO inyecta mientras JARVIS habla o el usuario
+            está en su turno → nunca interrumpe una respuesta en curso.
+          • 'hace cosas random': respeta el nivel de autonomía (en nivel 1 =
+            manual, NO hay inyecciones autónomas) + throttle mínimo entre avisos.
+        Devuelve True si inyectó."""
+        import time as _t
+        # 1. Nunca interrumpir a JARVIS ni al usuario a mitad de turno
+        if getattr(self, "_is_speaking", False) or getattr(self, "_is_transmitting_turn", False):
+            return False
+        # 2. Respetar nivel de autonomía + kill switch
+        try:
+            from core.autonomy import get_level, is_killed
+            if is_killed() or get_level() < requires_level:
+                return False
+        except Exception:
+            pass
+        # 3. Respetar modo focus
+        try:
+            from core.focus_mode import is_active as _focus_on
+            if _focus_on():
+                return False
+        except Exception:
+            pass
+        # 4. Throttle: no saturar con avisos seguidos
+        now = _t.time()
+        if now - self._last_autonomous_inject < min_gap_s:
+            return False
+        self._last_autonomous_inject = now
+        self._inject_context(text)
+        return True
 
     def _on_file_analyze(self, content: str, filename: str, path: str):
         """
@@ -2672,14 +2707,28 @@ class JarvisLive:
                         # Start Notification Watcher
                         try:
                             from core.notification_watcher import NotificationWatcher
+                            # Apps cuyas notificaciones SÍ vale la pena avisar
+                            # (mensajería/correo). Todo lo demás — YouTube, juegos,
+                            # navegador — se muestra en el holograma pero NO
+                            # interrumpe a JARVIS por voz (antes CADA notificación
+                            # lo despertaba → "hacía cosas random").
+                            _IMPORTANT_APPS = ("whatsapp", "mail", "correo", "gmail",
+                                               "outlook", "teams", "telegram", "messenger")
                             def _on_notif(app_name, title, body):
-                                self._inject_text(f"[SISTEMA] Acaba de llegar una notificación de {app_name}. Título: {title}. Ofrécele leérsela.")
-                                # Update hologram via thread-safe signal
+                                # Siempre mostrar en holograma (visual, no molesta)
                                 try:
                                     html_content = f"<div style='padding: 20px; font-family: Outfit, sans-serif;'><h2 style='color: #f59e0b; margin-top:0;'><i class='fas fa-bell'></i> {app_name}</h2><h3 style='color: white; margin-bottom: 5px;'>{title}</h3><p style='color: rgba(255,255,255,0.8); font-size: 16px; margin-top:0;'>{body}</p></div>"
                                     self.ui._win._holo_sig.emit("", html_content)
                                 except Exception:
                                     pass
+                                # Avisar por voz SOLO si es una app importante, vía
+                                # el gate (respeta si habla / nivel / throttle).
+                                if any(a in (app_name or "").lower() for a in _IMPORTANT_APPS):
+                                    self._inject_autonomous(
+                                        f"(Llegó una notificación de {app_name}: {title}. "
+                                        "Solo si el usuario no está ocupado, ofrécele leérsela en una frase.)",
+                                        min_gap_s=60, requires_level=2,
+                                    )
 
                             self._notif_watcher = NotificationWatcher(_on_notif)
                             tg.create_task(self._notif_watcher.start())

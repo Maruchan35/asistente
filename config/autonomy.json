@@ -1,4 +1,5 @@
 {
-  "level": 3,
-  "changed_at": "2026-06-16T11:18:59"
+  "level": 1,
+  "changed_at": "2026-07-18T15:25:53",
+  "note": "bajado a manual por defecto - evita acciones no pedidas"
 }
