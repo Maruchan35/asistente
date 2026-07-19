@@ -94,6 +94,78 @@ def resolve_path(p: str) -> str:
     # Fallback: resolver relativo al Escritorio para no mezclar con el directorio de JARVIS
     return os.path.join(home, "Desktop", p)
 
+def _dest_into(src: str, dest: str) -> str:
+    """Resolver la ruta final de destino para move/copy.
+
+    Si 'dest' es (o parece) una CARPETA, el resultado es dest/basename(src) —
+    es decir, meter el origen DENTRO de la carpeta (lo que el usuario espera al
+    decir 'mueve X a Documentos'). Si 'dest' es una ruta de archivo NUEVA, se
+    usa tal cual (equivale a mover+renombrar).
+
+    Esto evita el WinError 183 ('no se puede crear un archivo que ya existe')
+    que ocurría al intentar copiar/mover una carpeta ENCIMA de otra existente.
+    """
+    src_name = os.path.basename(src.rstrip("/\\"))
+    if os.path.isdir(dest) or dest.endswith(("/", "\\")):
+        return os.path.join(dest, src_name)
+    return dest
+
+
+def _batch_transfer(op: str, src_dir: str, dest_dir: str,
+                    name_filter: str, ext_filter: str, player=None) -> str:
+    """Mover/copiar RECURSIVAMENTE todos los archivos de src_dir (y subcarpetas)
+    que coincidan con nombre/extensión hacia dest_dir.
+
+    Reemplaza el patrón Unix 'find ... -exec mv' que NO existe en Windows y que
+    hacía fallar a JARVIS. Ej: juntar todos los .gsc dispersos en una carpeta."""
+    name_f = (name_filter or "").lower().strip()
+    ext_f = (ext_filter or "").lower().strip()
+    if ext_f and not ext_f.startswith("."):
+        ext_f = "." + ext_f
+    os.makedirs(dest_dir, exist_ok=True)
+    matched = done = skipped = 0
+    errors = []
+    for root, _, files in os.walk(src_dir):
+        for fname in files:
+            fl = fname.lower()
+            if name_f and name_f not in fl:
+                continue
+            if ext_f and not fl.endswith(ext_f):
+                continue
+            matched += 1
+            srcf = os.path.join(root, fname)
+            dstf = os.path.join(dest_dir, fname)
+            if os.path.abspath(srcf) == os.path.abspath(dstf):
+                continue  # ya está en el destino
+            if os.path.exists(dstf):
+                skipped += 1
+                continue
+            try:
+                if op == "move":
+                    shutil.move(srcf, dstf)
+                else:
+                    shutil.copy2(srcf, dstf)
+                done += 1
+            except Exception as e:
+                errors.append(f"{fname}: {e}")
+    if matched == 0:
+        crit = ext_f or name_f or "el filtro"
+        return (f"No encontré archivos que coincidan con '{crit}' dentro de "
+                f"'{os.path.basename(src_dir)}'.")
+    verb = "Moví" if op == "move" else "Copié"
+    msg = f"{verb} {done} archivo(s) a '{os.path.basename(dest_dir)}'."
+    if skipped:
+        msg += f" {skipped} ya existían y los omití."
+    if errors:
+        msg += f" {len(errors)} con error: {errors[0]}"
+    if player:
+        try:
+            player.write_log(f"🚚 {msg}")
+        except Exception:
+            pass
+    return msg
+
+
 def file_controller(parameters: dict, player=None) -> str:
     """
     Manages files and folders: list, create, delete, move, copy, rename, read, write, edit, find, largest, disk_usage, organize_desktop.
@@ -196,9 +268,23 @@ def file_controller(parameters: dict, player=None) -> str:
             if not os.path.exists(resolved_path):
                 return f"Error: La ruta origen '{path_raw}' no existe."
             resolved_dest = resolve_path(destination_raw)
-            os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
-            shutil.move(resolved_path, resolved_dest)
-            msg = f"Movido de '{path_raw}' a '{destination_raw}' correctamente."
+
+            # BATCH: si el origen es una carpeta y se pide extensión/nombre,
+            # mover TODOS los archivos que coincidan (recursivo) al destino.
+            # Reemplaza el 'find ... -exec mv' de Unix que NO corre en Windows.
+            if os.path.isdir(resolved_path) and (extension or search_name):
+                return _batch_transfer("move", resolved_path, resolved_dest,
+                                       search_name, extension, player)
+
+            final = _dest_into(resolved_path, resolved_dest)
+            if os.path.abspath(final) == os.path.abspath(resolved_path):
+                return "El origen y el destino son el mismo; no hay nada que mover."
+            if os.path.exists(final):
+                return (f"Error: Ya existe '{os.path.basename(final)}' en el destino. "
+                        "Renómbralo o elige otra carpeta para no sobrescribir.")
+            os.makedirs(os.path.dirname(final) or ".", exist_ok=True)
+            shutil.move(resolved_path, final)
+            msg = f"Movido '{os.path.basename(resolved_path)}' → '{final}' correctamente."
             if player:
                 player.write_log(f"🚚 {msg}")
             return msg
@@ -208,12 +294,19 @@ def file_controller(parameters: dict, player=None) -> str:
             if not os.path.exists(resolved_path):
                 return f"Error: La ruta origen '{path_raw}' no existe."
             resolved_dest = resolve_path(destination_raw)
+
+            if os.path.isdir(resolved_path) and (extension or search_name):
+                return _batch_transfer("copy", resolved_path, resolved_dest,
+                                       search_name, extension, player)
+
+            final = _dest_into(resolved_path, resolved_dest)
             if os.path.isdir(resolved_path):
-                shutil.copytree(resolved_path, resolved_dest)
+                # dirs_exist_ok evita WinError 183 al copiar dentro de una carpeta existente
+                shutil.copytree(resolved_path, final, dirs_exist_ok=True)
             else:
-                os.makedirs(os.path.dirname(resolved_dest), exist_ok=True)
-                shutil.copy2(resolved_path, resolved_dest)
-            msg = f"Copiado de '{path_raw}' a '{destination_raw}' correctamente."
+                os.makedirs(os.path.dirname(final) or ".", exist_ok=True)
+                shutil.copy2(resolved_path, final)
+            msg = f"Copiado '{os.path.basename(resolved_path)}' → '{final}' correctamente."
             if player:
                 player.write_log(f"👥 {msg}")
             return msg

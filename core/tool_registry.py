@@ -405,7 +405,14 @@ TOOL_DECLARATIONS = [
             "3. Lee la lista de encontrados. Si el usuario elige uno por posición (ej: 'el primero', 'el 5to'), DIME EL NOMBRE EXACTO DEL ARCHIVO Y PREGUNTA SI ES EL CORRECTO **ANTES** DE COPIARLO.\n"
             "4. SOLO TRAS CONFIRMAR que es el correcto, usa `action='select_and_copy'` con el `filepath` exacto.\n"
             "5. Luego de copiarlo, pregúntale si quiere ABRIRLO o ENVIARLO POR WHATSAPP.\n\n"
-            "Además, gestiona archivos locales: list, create, delete, move, copy, rename, read, edit, etc."
+            "Además, gestiona archivos locales: list, create, delete, move, copy, rename, read, edit, etc.\n"
+            "OBLIGATORIO para MOVER/COPIAR/RENOMBRAR/ORGANIZAR archivos usa SIEMPRE esta tool, "
+            "NUNCA el terminal (los comandos find/mv/cp/ls/rm son de Linux y FALLAN en Windows).\n"
+            "• move/copy meten el origen DENTRO de la carpeta destino (ej: move path='desktop/x' "
+            "destination='documents' → Documents/x). No hace falta repetir el nombre en el destino.\n"
+            "• BATCH: para juntar/mover varios archivos por tipo, usa move/copy con path=CARPETA + "
+            "extension='.gsc' (o name='parte') + destination=CARPETA. Mueve TODOS los que coincidan "
+            "(incluidas subcarpetas) de una sola vez."
         ),
         "parameters": {
             "type": "OBJECT",
