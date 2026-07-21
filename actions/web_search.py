@@ -195,12 +195,13 @@ def web_search(parameters: dict, player=None) -> str:
                 except Exception: pass
 
     # ── Fallback: abrir navegador ────────────────────────────────────────────
+    # new=2 → abrir SIEMPRE en pestaña nueva, sin machacar la página actual.
     if not results_text:
-        webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
+        webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query), new=2)
         return f"No pude obtener resultados automáticamente. Abrí Google para: '{query}'."
 
     if open_browser:
-        webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query))
+        webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(query), new=2)
 
     final = f"Resultados de búsqueda para '{query}':\n\n{results_text}"
     if player:

@@ -2290,7 +2290,10 @@ class JarvisLive:
 
             with self._speaking_lock:
                 jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted:
+            # También silenciar el mic mientras una tool se ejecuta: evita que el
+            # audio de esos segundos se acumule y se procese como un turno viejo.
+            tool_running = getattr(self, "_is_transmitting_turn", False)
+            if not jarvis_speaking and not tool_running and not self.ui.muted:
                 # Calculate RMS audio level for sphere visualization
                 rms = 0.0
                 try:
@@ -2518,19 +2521,30 @@ class JarvisLive:
                             _tools_this_turn.append(fc.name)
                         async def _handle_tools(fcs_to_run):
                             nonlocal _last_tool
-                            if len(fcs_to_run) > 1:
-                                tasks = [asyncio.create_task(self._execute_tool(fc)) for fc in fcs_to_run]
-                                fn_responses = list(await asyncio.gather(*tasks))
-                            else:
-                                fn_responses = [await self._execute_tool(fcs_to_run[0])]
+                            # Mientras una tool se ejecuta (abrir navegador, buscar,
+                            # WhatsApp...) el micrófono debe SILENCIARSE. Si no, el
+                            # audio que llega en esos segundos (eco, ruido, o la
+                            # siguiente orden del usuario) se acumula en Gemini y se
+                            # procesa como un turno viejo → 'hace lo que le dije al
+                            # principio' + latencia + delirio. Esta bandera cierra
+                            # el mic en el callback de audio hasta terminar.
+                            self._is_transmitting_turn = True
                             try:
-                                await self.session.send_tool_response(
-                                    function_responses=fn_responses
-                                )
-                                _last_tool = None  # only clear AFTER successful send
-                            except Exception as tool_err:
-                                print(f"[JARVIS] ❌ send_tool_response failed: {tool_err}")
-                                
+                                if len(fcs_to_run) > 1:
+                                    tasks = [asyncio.create_task(self._execute_tool(fc)) for fc in fcs_to_run]
+                                    fn_responses = list(await asyncio.gather(*tasks))
+                                else:
+                                    fn_responses = [await self._execute_tool(fcs_to_run[0])]
+                                try:
+                                    await self.session.send_tool_response(
+                                        function_responses=fn_responses
+                                    )
+                                    _last_tool = None  # only clear AFTER successful send
+                                except Exception as tool_err:
+                                    print(f"[JARVIS] ❌ send_tool_response failed: {tool_err}")
+                            finally:
+                                self._is_transmitting_turn = False
+
                         # Ejecutar herramientas en background para no bloquear el receive del websocket
                         asyncio.create_task(_handle_tools(fcs))
         except Exception as e:

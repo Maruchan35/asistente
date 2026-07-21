@@ -359,11 +359,14 @@ def browser_control(parameters: dict, player=None) -> str:
             query = parameters.get("query", "")
             if not query:
                 return "Error: Falta la búsqueda (query)."
-            pyautogui.hotkey("ctrl", "l")
-            time.sleep(0.05)
+            # Abrir SIEMPRE en pestaña NUEVA para no reemplazar la página que el
+            # usuario estaba viendo. Antes usaba Ctrl+L (barra de la pestaña
+            # actual) y machacaba lo que hubiera abierto.
+            pyautogui.hotkey("ctrl", "t")
+            time.sleep(0.35)
             pyautogui.write(query, interval=0.005)
             pyautogui.press("enter")
-            return f"Buscando '{query}'."
+            return f"Buscando '{query}' en una pestaña nueva."
 
         elif action == "new_tab":
             url = parameters.get("url", "")
