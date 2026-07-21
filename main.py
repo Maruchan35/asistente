@@ -96,7 +96,22 @@ except Exception as e:
 # ---------------------------------------------------
 
 # ── Dedicated thread pool for tool execution — prevents starvation ────────────
+# 8 hilos: varias tools de CPU/IO (búsqueda, documentos, imágenes, archivos,
+# investigación) pueden correr EN PARALELO sin bloquearse entre sí ni bloquear
+# la conversación. Aprovecha CPUs de varios núcleos (i7/Ryzen, etc.).
 _TOOL_EXECUTOR = ThreadPoolExecutor(max_workers=8, thread_name_prefix="jarvis-tool")
+
+# Tools que controlan el mouse/teclado FÍSICO (pyautogui). NO pueden correr dos
+# a la vez: pelearían por el único cursor y se corromperían. Se serializan con
+# un lock global (_ui_lock), mientras las demás siguen en paralelo. Ser generoso
+# aquí solo cuesta un poco de serialización; faltar una causaría carreras.
+_PHYSICAL_TOOLS = frozenset({
+    "browser_control", "whatsapp", "visual_click", "teams_tasks",
+    "screen_reader", "social_media", "netflix_control", "verify_outcome",
+    "spotify_control", "desktop_control", "computer_settings",
+    "native_ui", "app_macro", "computer_control", "window_control",
+    "contextual_control",
+})
 
 try:
     from zoneinfo import ZoneInfo as _ZoneInfo
@@ -655,6 +670,9 @@ class JarvisLive:
         self.noise_gate_threshold = float(cfg_keys.get("mic_sensitivity", 0.003))
         self.last_speech_time     = 0.0
         self._is_transmitting_turn = False
+        # Lock para serializar tools que usan el mouse/teclado físico (pyautogui).
+        # Se crea perezosamente dentro del event loop (asyncio.Lock lo requiere).
+        self._ui_lock = None
 
         # Vosk se carga en BACKGROUND — tarda 1-3s y bloqueaba el arranque.
         # Solo se usa en Modo Suspensión; self.vosk_recognizer queda None
@@ -1427,6 +1445,22 @@ class JarvisLive:
         return types.LiveConnectConfig(**cfg_kwargs)
 
     async def _execute_tool(self, fc) -> types.FunctionResponse:
+        """Punto de entrada de toda tool. Serializa las que usan el mouse/teclado
+        físico (pyautogui) con un lock global — dos no pueden mover el cursor a la
+        vez sin corromperse. Las tools de CPU/IO (búsqueda, documentos, imágenes,
+        archivos...) NO tocan el lock → corren en paralelo en los 8 hilos.
+
+        Así JARVIS multitarea de verdad: puede investigar, generar una imagen y
+        crear un documento a la vez, y solo hace fila cuando dos acciones necesitan
+        la pantalla."""
+        if self._ui_lock is None:
+            self._ui_lock = asyncio.Lock()
+        if fc.name in _PHYSICAL_TOOLS:
+            async with self._ui_lock:
+                return await self._execute_tool_inner(fc)
+        return await self._execute_tool_inner(fc)
+
+    async def _execute_tool_inner(self, fc) -> types.FunctionResponse:
         name = fc.name
         args = dict(fc.args or {})
 
