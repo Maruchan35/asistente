@@ -670,6 +670,7 @@ class JarvisLive:
         self.noise_gate_threshold = float(cfg_keys.get("mic_sensitivity", 0.003))
         self.last_speech_time     = 0.0
         self._is_transmitting_turn = False
+        self._tool_gate_started    = 0.0   # cuándo empezó a mutear el mic por una tool
         # Lock para serializar tools que usan el mouse/teclado físico (pyautogui).
         # Se crea perezosamente dentro del event loop (asyncio.Lock lo requiere).
         self._ui_lock = None
@@ -2326,7 +2327,15 @@ class JarvisLive:
                 jarvis_speaking = self._is_speaking
             # También silenciar el mic mientras una tool se ejecuta: evita que el
             # audio de esos segundos se acumule y se procese como un turno viejo.
+            # PERO con tope de 8s: si una tool tarda más (imagen, red lenta) o la
+            # bandera se quedó pegada tras una reconexión, el mic NO debe quedar
+            # mudo indefinidamente — el usuario se quedaba sin ser escuchado y
+            # tenía que re-seleccionar el micrófono. Pasados 8s, el mic reabre.
             tool_running = getattr(self, "_is_transmitting_turn", False)
+            if tool_running:
+                import time as _tw
+                if (_tw.monotonic() - getattr(self, "_tool_gate_started", 0.0)) > 8.0:
+                    tool_running = False
             if not jarvis_speaking and not tool_running and not self.ui.muted:
                 # Calculate RMS audio level for sphere visualization
                 rms = 0.0
@@ -2563,6 +2572,7 @@ class JarvisLive:
                             # principio' + latencia + delirio. Esta bandera cierra
                             # el mic en el callback de audio hasta terminar.
                             self._is_transmitting_turn = True
+                            self._tool_gate_started = time.monotonic()
                             try:
                                 if len(fcs_to_run) > 1:
                                     tasks = [asyncio.create_task(self._execute_tool(fc)) for fc in fcs_to_run]
@@ -2733,6 +2743,10 @@ class JarvisLive:
                     reconnect_delay   = 1.0   # reset backoff on successful connection
                     consecutive_fails = 0
                     self._api_1011_tool = None   # clear 1011 tool tracker
+                    # Reset del gate del mic: si una tool estaba corriendo cuando
+                    # cayó la sesión, la bandera pudo quedar pegada → mic mudo.
+                    # Al reconectar, arrancamos con el mic ABIERTO.
+                    self._is_transmitting_turn = False
 
                     # Clear recent-turns buffer so conversational context is fresh
                     try:
