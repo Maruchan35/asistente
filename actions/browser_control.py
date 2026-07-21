@@ -342,6 +342,30 @@ def browser_control(parameters: dict, player=None) -> str:
     # ══════════════════════════════════════════════════════════════════════════
 
     if not win:
+        # No se detectó un navegador abierto. Para acciones de NAVEGACIÓN no
+        # fallamos: LANZAMOS el navegador por defecto con la URL/búsqueda
+        # directamente. webbrowser.open abre Brave aunque esté cerrado, y si en
+        # realidad ya estaba abierto (pero pygetwindow no lo detectó por el
+        # título) reusa esa ventana en una pestaña nueva. Esto arregla el
+        # 'primer error no abre el navegador' que dependía del escenario.
+        if action in ("go_to", "search", "new_tab"):
+            import webbrowser
+            import urllib.parse
+            if action == "search":
+                q = parameters.get("query", "")
+                if not q:
+                    return "Error: Falta la búsqueda (query)."
+                webbrowser.open("https://www.google.com/search?q=" + urllib.parse.quote(q), new=2)
+                return f"Abrí el navegador y busqué '{q}'."
+            url = parameters.get("url", "")
+            if not url:
+                webbrowser.open("about:blank", new=2)
+                return "Abrí el navegador."
+            if not url.startswith(("http://", "https://", "about:")):
+                url = "https://" + url
+            webbrowser.open(url, new=2)
+            return f"Abrí el navegador en {url}."
+        # Multimedia/scroll sí requieren un navegador ya abierto.
         return "No se encontró ningún navegador (Chrome, Edge, Firefox, Brave) abierto."
 
     try:
