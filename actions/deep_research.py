@@ -45,12 +45,75 @@ _WORDS_PER_SECTION  = 1100
 _MIN_SECTIONS       = 5
 _MAX_SECTIONS       = 18
 
+# Modelos GRATIS de OpenRouter (terminan en :free — NO gastan créditos). La
+# lista real se descubre dinámicamente con _discover_free_models(); esta es solo
+# el respaldo por si la API no responde. Antes usaba modelos de PAGO, que daban
+# HTTP 402 cuando se acababan los créditos.
 _MODELS_FALLBACK = [
-    "deepseek/deepseek-chat-v3.1",
-    "google/gemini-2.5-flash",
-    "anthropic/claude-3.5-sonnet",
-    "openai/gpt-4o-mini",
+    "google/gemma-4-31b-it:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "deepseek/deepseek-chat-v3-0324:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
 ]
+
+_free_models_cache: list[str] | None = None
+
+
+def _discover_free_models() -> list[str]:
+    """Consulta la API de OpenRouter y devuelve los IDs de modelos GRATIS
+    (pricing 0), ordenados por contexto grande primero. Cacheado por proceso.
+    Si falla la red, devuelve []  → el llamador usa _MODELS_FALLBACK."""
+    global _free_models_cache
+    if _free_models_cache is not None:
+        return _free_models_cache
+    try:
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/models",
+            headers={"User-Agent": "JARVIS"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        free = []
+        for m in data.get("data", []):
+            pr = m.get("pricing", {}) or {}
+            try:
+                p = float(pr.get("prompt", "1") or "1")
+                c = float(pr.get("completion", "0") or "0")
+            except Exception:
+                continue
+            if p != 0 or c != 0:
+                continue
+            # Solo modelos que GENEREN TEXTO puro (excluir música/imagen/audio
+            # como google/lyria, que aunque son gratis no sirven para documentos).
+            arch = m.get("architecture", {}) or {}
+            out = [o.lower() for o in (arch.get("output_modalities") or ["text"])]
+            if out != ["text"]:
+                continue
+            mid = m.get("id", "")
+            _JUNK = ("content-safety", "guard", "moderation", "embed", "-clip")
+            if (mid and mid != "openrouter/free"          # el router meta es impredecible
+                    and not any(j in mid.lower() for j in _JUNK)):  # no-generativos
+                free.append((mid, int(m.get("context_length", 0) or 0)))
+        # Preferir proveedores fuertes para texto largo en español, luego contexto.
+        _PREFERRED = ("deepseek", "llama", "qwen", "gemini", "gemma",
+                      "mistral", "nemotron")
+        def _score(item):
+            mid, ctx = item
+            pref = next((len(_PREFERRED) - i for i, p in enumerate(_PREFERRED) if p in mid.lower()), 0)
+            return (pref, ctx)
+        free.sort(key=_score, reverse=True)
+        _free_models_cache = [mid for mid, _ in free] or []
+    except Exception:
+        _free_models_cache = []
+    return _free_models_cache
+
+
+def _pick_model(attempt: int) -> str:
+    """Elige un modelo GRATIS, rotando en cada reintento."""
+    models = _discover_free_models() or _MODELS_FALLBACK
+    return models[attempt % len(models)]
 
 
 # ── Cliente LLM dedicado (max_tokens alto, sin "sé conciso") ──────────────────
@@ -76,7 +139,14 @@ def _llm_call(prompt: str, max_tokens: int = 3500, system: str | None = None,
     if not api_key:
         return _deepseek_direct_call(prompt, max_tokens, system)
 
-    model = cfg.get("openrouter_model", _MODELS_FALLBACK[attempt % len(_MODELS_FALLBACK)])
+    # Por defecto usa modelos GRATIS (no gastan créditos). Si el usuario configuró
+    # un openrouter_model explícito, se respeta en el primer intento; en los
+    # reintentos rota a modelos gratis para no fallar por créditos.
+    cfg_model = (cfg.get("openrouter_model") or "").strip()
+    if cfg_model and attempt == 0:
+        model = cfg_model
+    else:
+        model = _pick_model(attempt if not cfg_model else attempt - 1)
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -110,11 +180,17 @@ def _llm_call(prompt: str, max_tokens: int = 3500, system: str | None = None,
             body = e.read().decode("utf-8")
         except Exception:
             pass
-        # 402 = créditos insuficientes en OpenRouter. El propio error dice cuántos
-        # tokens SÍ alcanzan ("...can only afford N..."). En vez de reventar la
-        # sección con un mensaje de error, reintentar con ese tope reducido; si
-        # sigue sin alcanzar, caer a DeepSeek. Antes esto tumbaba secciones enteras.
+        # 402 = créditos insuficientes (solo pasa con modelos de PAGO). Como ahora
+        # el default son modelos GRATIS, casi nunca debería aparecer. Si aparece
+        # (p.ej. modelo configurado a mano de pago): 1) rotar a un modelo gratis;
+        # 2) reintentar con el tope de tokens que sí alcance; 3) caer a DeepSeek.
         if e.code == 402:
+            n_free = len(_discover_free_models() or _MODELS_FALLBACK)
+            if attempt < n_free:
+                try:
+                    return _llm_call(prompt, max_tokens, system, attempt + 1)
+                except Exception:
+                    pass
             m = re.search(r"can only afford (\d+)", body)
             if m:
                 affordable = int(m.group(1))
@@ -129,8 +205,8 @@ def _llm_call(prompt: str, max_tokens: int = 3500, system: str | None = None,
             except Exception:
                 pass
             raise RuntimeError(
-                "OpenRouter sin créditos suficientes (HTTP 402) y sin proveedor "
-                "de respaldo. Recarga créditos en openrouter.ai o configura DeepSeek."
+                "OpenRouter sin créditos y sin modelo gratis disponible. Recarga "
+                "créditos en openrouter.ai o revisa tu conexión."
             )
         # Si es rate limit o modelo caído, probar otro
         if attempt < len(_MODELS_FALLBACK) - 1 and e.code in (429, 500, 502, 503):
