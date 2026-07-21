@@ -110,6 +110,28 @@ def _llm_call(prompt: str, max_tokens: int = 3500, system: str | None = None,
             body = e.read().decode("utf-8")
         except Exception:
             pass
+        # 402 = créditos insuficientes en OpenRouter. El propio error dice cuántos
+        # tokens SÍ alcanzan ("...can only afford N..."). En vez de reventar la
+        # sección con un mensaje de error, reintentar con ese tope reducido; si
+        # sigue sin alcanzar, caer a DeepSeek. Antes esto tumbaba secciones enteras.
+        if e.code == 402:
+            m = re.search(r"can only afford (\d+)", body)
+            if m:
+                affordable = int(m.group(1))
+                safe = max(256, affordable - 64)
+                if safe < max_tokens:
+                    try:
+                        return _llm_call(prompt, safe, system, attempt)
+                    except Exception:
+                        pass
+            try:
+                return _deepseek_direct_call(prompt, max_tokens, system)
+            except Exception:
+                pass
+            raise RuntimeError(
+                "OpenRouter sin créditos suficientes (HTTP 402) y sin proveedor "
+                "de respaldo. Recarga créditos en openrouter.ai o configura DeepSeek."
+            )
         # Si es rate limit o modelo caído, probar otro
         if attempt < len(_MODELS_FALLBACK) - 1 and e.code in (429, 500, 502, 503):
             time.sleep(1.5)
