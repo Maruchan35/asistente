@@ -51,11 +51,16 @@ def _find_dispatched_names(tree: ast.Module) -> set[str]:
     `if name == "X"`, `elif name == "X"`, `name == "X" or name == "Y"`."""
     names: set[str] = set()
 
-    func = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_execute_tool":
-            func = node
-            break
+    # El elif gigante vive en _execute_tool_inner; _execute_tool es solo el
+    # wrapper que toma el _ui_lock para las tools físicas. Preferir el inner
+    # (el wrapper no tiene ramas), con fallback al nombre viejo por compat.
+    funcs = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef)
+        and node.name in ("_execute_tool_inner", "_execute_tool")
+    }
+    func = funcs.get("_execute_tool_inner") or funcs.get("_execute_tool")
     if func is None:
         return names
 
